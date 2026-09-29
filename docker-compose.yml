@@ -1,0 +1,12 @@
+services:
+  ejari:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ejari_data:/app/data   # persistent disk for the SQLite database
+    environment:
+      - PORT=4000
+volumes:
+  ejari_data:

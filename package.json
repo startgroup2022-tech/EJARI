@@ -1,0 +1,13 @@
+{
+  "name": "ejari-platform",
+  "version": "2.0.0",
+  "description": "Ejari — real, working rental-management platform: website, control panel (landlord/tenant/admin) and mobile app, backed by a real Node.js server and a real persistent SQLite database. No mock data at runtime — everything is stored and served for real.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs 4000",
+    "test": "node tests/smoke.mjs"
+  },
+  "engines": { "node": ">=22.5.0" }
+}

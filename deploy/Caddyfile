@@ -1,0 +1,5 @@
+# Reverse proxy with automatic free HTTPS (Let's Encrypt). Replace the domain, then:
+#   sudo caddy run --config deploy/Caddyfile
+ejari.yourdomain.com {
+    reverse_proxy localhost:4000
+}

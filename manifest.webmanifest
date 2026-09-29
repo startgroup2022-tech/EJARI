@@ -1,0 +1,9 @@
+{
+  "name": "إيجاري — Ejari",
+  "short_name": "إيجاري",
+  "start_url": "app-screen.html",
+  "display": "standalone",
+  "background_color": "#0A121C",
+  "theme_color": "#17233B",
+  "icons": [{ "src": "assets/img/logo-dark.webp", "sizes": "536x325", "type": "image/webp" }]
+}

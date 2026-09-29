@@ -1,0 +1,181 @@
+# إيجاري — منصة إدارة الإيجارات (نسخة حقيقية بالكامل)
+
+Ejari rental-management platform — a **real, working full-stack application**: a real Node.js server, a real persistent SQLite database, real password authentication with hashed passwords and sessions, and a real REST API. Nothing here is a front-end-only mockup — every button that changes data (sign a contract, pay rent, open a maintenance ticket, approve a user…) sends a real HTTP request that is validated and persisted on the server, and survives restarts.
+
+عربي/إنجليزي · RTL/LTR · فاتح/داكن · متجاوب مع كل الشاشات.
+
+## التشغيل (دقيقة واحدة)
+
+يحتاج **Node.js 22.5 أو أحدث** فقط (لا حزم خارجية على الإطلاق — لا `npm install`).
+
+```bash
+node server.mjs            # أو: node server.mjs 8080  لاستخدام منفذ آخر
+```
+
+ثم افتح:
+- **الموقع** → http://localhost:4000/website.html
+- **لوحة التحكم** → http://localhost:4000/dashboard.html
+- **تطبيق الجوال** → http://localhost:4000/app.html
+
+أول تشغيل يُنشئ `data/ejari.db` تلقائياً ويعبّئه ببيانات أولية (انظر أدناه). احذف هذا الملف لإعادة البدء من الصفر.
+
+## هذا نظام حقيقي — كيف تتأكد؟
+
+| جرّبه | ماذا سيحصل فعلياً |
+|---|---|
+| أنشئ حساباً جديداً ببريدك (زر «إنشاء حساب») | يُحفظ في قاعدة البيانات بكلمة مرور مشفّرة (scrypt)، وتقدر تسجّل خروج وتدخل به مرة ثانية |
+| سجّل الدخول، ثم أعد تحميل الصفحة | تبقى مسجّلاً — الجلسة كوكي حقيقي (HttpOnly) من الخادم، لا حالة وهمية بالمتصفح |
+| أوقف الخادم (Ctrl+C) وشغّله ثانية | بياناتك كلها موجودة كما هي — محفوظة في `data/ejari.db` |
+| افتح `dashboard.html` من متصفحين مختلفين بنفس الحساب | تشوف نفس البيانات بالضبط، لأنها من نفس القاعدة لا من ذاكرة كل متصفح |
+| مؤجر ينشئ عقداً ← مستأجر يوقّعه ويدفع الرسوم | العقد يتفعّل فعلياً في القاعدة، والإشعار يوصل لحساب المؤجر الحقيقي |
+| تحقق من عقد برقمه من الصفحة الرئيسية (بدون تسجيل دخول) | يستعلم من قاعدة البيانات مباشرة عبر نقطة API عامة |
+
+راجع `npm test`-المكافئ أدناه لتشغيل 34 فحصاً آلياً يعمل بهذه الطريقة تماماً (خادم حقيقي + HTTP حقيقي)، لا محاكاة.
+
+## حسابات تجريبية حقيقية
+
+ثلاثة حسابات مزروعة عند أول تشغيل، بكلمة مرور حقيقية واحدة للجميع: **`Demo@1234`**
+
+| البريد | الدور |
+|---|---|
+| `rashed.almanai@example.bh` | مؤجر |
+| `sara.aldosari@example.bh` | مستأجر |
+| `fatima.alhammadi@ejari.bh` | مدير النظام |
+
+من نافذة «تسجيل الدخول» فيه زر دخول تجريبي بضغطة واحدة (ينشئ نفس الجلسة الحقيقية)، أو تقدر تكتب البريد وكلمة المرور يدوياً في تبويب «بريد وكلمة مرور» لترى أنه تسجيل دخول حقيقي بكل معنى الكلمة.
+
+**رحلة كاملة تقدر تجربها الآن (دقيقتان):**
+1. ادخل كمؤجر ← «عقد جديد» ← اختر وحدة شاغرة ومستأجراً ← وقّع.
+2. سجّل خروج ← ادخل كذلك المستأجر (بريده + `Demo@1234`) ← افتح العقد ← وقّع ← ادفع رسوم التسجيل.
+3. العقد يتحول تلقائياً إلى «فعّال» — بيانات حقيقية بقاعدة البيانات، ليست تمثيلاً في المتصفح.
+4. ادخل كمدير النظام وشوف العقد الجديد وسجل التدقيق مسجّلاً كل خطوة.
+
+## الأوامر
+
+| الأمر | الوظيفة |
+|---|---|
+| `node server.mjs [port]` | تشغيل الخادم الحقيقي (افتراضياً المنفذ 4000) |
+| `node tests/smoke.mjs` | **اختبار حقيقي شامل (34 فحصاً):** يشغّل نسخة حقيقية من الخادم على منفذ مؤقت بقاعدة بيانات مؤقتة، وينفّذ تسجيلاً حقيقياً ودخولاً وعقداً كاملاً وصيانة وتذاكر وصلاحيات عبر HTTP فعلي — ثم يحذف قاعدة الاختبار |
+
+## هيكل المشروع
+
+```
+ejari-platform/
+├── server.mjs               نقطة دخول الخادم
+├── server/
+│   ├── db.mjs                مخطط قاعدة البيانات + البيانات الأولية (SQLite عبر node:sqlite المدمجة بالـNode)
+│   ├── auth.mjs               تشفير كلمات المرور (scrypt) وكوكيز الجلسة
+│   ├── api.mjs                كل منطق العمل: العقود، المدفوعات، الصيانة، المستخدمون، الإدارة…
+│   └── http.mjs               خادم HTTP: تقديم الملفات الثابتة + توجيه واجهة REST
+├── website.html / dashboard.html / app.html / app-screen.html    نقاط الدخول الثلاث
+├── assets/
+│   ├── css/                   tokens (الألوان) · base · landing · responsive · auth · mobile
+│   ├── js/
+│   │   ├── api.js              عميل الاتصال بالـAPI (fetch) + hydrate() لتعبئة الواجهة من استجابة الخادم
+│   │   ├── core.js             الحالة، الترجمة T()، الأيقونات، الرسوم البيانية، مكونات الواجهة
+│   │   ├── data.js             جداول مرجعية ثابتة (تسميات) + دوال مساعدة تعمل على البيانات المحمَّلة من الخادم
+│   │   ├── app.js               إطار لوحة التحكم، القوائم، النوافذ، المساعد الذكي
+│   │   ├── views-role.js        صفحات المؤجر والمستأجر — كل زر مؤثر يستدعي API حقيقياً
+│   │   ├── views-admin.js       صفحات الإدارة — نفس الشيء
+│   │   ├── landing.js           محتوى الصفحة الرئيسية
+│   │   ├── auth.js              تسجيل الدخول التجريبي/الحقيقي والتسجيل، مشتركة بين الثلاث نقاط
+│   │   ├── dashboard-login.js / mobile.js / boot-*.js    خصوصيات كل نقطة دخول
+│   │   └── main.js              ربط الأحداث
+│   └── img/                     الشعار
+├── data/                       قاعدة البيانات (تُنشأ تلقائياً، غير مرفوعة على git)
+├── tests/smoke.mjs              الاختبار الحقيقي الشامل
+└── docs/                        لقطات شاشة
+```
+
+## كيف تعمل الواجهة مع الخادم
+
+- عند تسجيل الدخول، يستدعي المتصفح `GET /api/bootstrap` فيرجع كل بيانات المستخدم (عقوده، مدفوعاته، صيانته…) مرة واحدة، وتُحمَّل في ذاكرة الواجهة (`DB.*`) بنفس الشكل الذي تتوقعه شاشات العرض.
+- أي زر يغيّر بيانات (توقيع، دفع، اعتماد…) يستدعي نقطة API حقيقية (`POST /api/...`)، وبعد نجاحها يُعاد تحميل `bootstrap` تلقائياً لضمان أن ما تراه على الشاشة هو **بالضبط** ما هو محفوظ في قاعدة البيانات، لا حالة محلية منفصلة قد تتعارض معها.
+- كل صفحة تحقق من الجلسة أولاً (`GET /api/auth/me`) وتعرض شاشة الدخول تلقائياً إن لم تكن مسجّلاً.
+
+## نقاط API الرئيسية
+
+```
+POST /api/auth/register | login | demo | logout      GET /api/auth/me
+GET  /api/bootstrap                                    (كل بيانات المستخدم دفعة واحدة)
+GET  /api/faq            GET /api/verify/:no           (عامة، بلا تسجيل دخول)
+
+POST /api/contracts                                     إنشاء عقد
+POST /api/contracts/:id/sign | approve | reject | terminate | resolve
+POST /api/contracts/:id/renew-request | renew-offer | renew-accept | renew-decline
+POST /api/contracts/:id/checklist
+
+POST /api/payments/:id/pay | remind | mark-cash        POST /api/payments/remind-all | autopay
+
+POST /api/maintenance                                    فتح طلب صيانة
+POST /api/maintenance/:id/assign | start | complete | rate
+
+POST /api/properties                POST /api/properties/:id/units       POST /api/units/:id/list
+POST /api/documents   DELETE /api/documents/:id
+POST /api/notifications/:id/read | read-all
+POST /api/tickets     POST /api/tickets/:id
+
+# إدارة فقط
+POST /api/users/:id/verify | status         POST /api/users/invite
+POST /api/verification/:id/approve | reject
+POST /api/properties/:id/verify | clear-duplicate
+POST /api/faq | /api/faq/:id/publish | DELETE /api/faq/:id
+POST /api/templates/:id     POST /api/messages/:id
+POST /api/integrations/:id/toggle | test
+POST /api/roles | /api/roles/:id/perm
+POST /api/settings          POST /api/refunds/:id
+```
+
+جميعها ترجع/تستقبل JSON، وتتطلب كوكي جلسة صالح عدا القسم العام (`/api/faq`, `/api/verify/:no`, `/api/auth/*`).
+
+## القيود الصادقة — ما هو حقيقي فعلاً وما لا يزال مبسّطاً
+
+هذا تطبيق حقيقي يعمل من طرف إلى طرف، لكن من الأمانة توضيح حدوده:
+
+- **الدفع:** يُسجَّل الدفع فعلياً في قاعدة البيانات (حالة، تاريخ، رقم إيصال حقيقي) ويُحدَّث العقد بناءً عليه — لكن لا يوجد اتصال ببوابة دفع بنكية فعلية (بنفاذ/فيزا). هذا يتطلب اتفاقية تجارية مع مزوّد دفع مرخّص، وهو خارج نطاق ما يمكن تضمينه في مشروع مفتوح.
+- **الجهات الحكومية** (مؤسسة التنظيم العقاري، هيئة الكهرباء والماء): شاشة «التكامل» حقيقية بمعنى أنها تُفعَّل/تُوقَف وتُحفظ في القاعدة، لكنها لا تتصل بأنظمة تلك الجهات فعلياً (تتطلب شراكة رسمية معها).
+- **الرسائل النصية والبريد الفعلي:** الإشعارات تُنشأ وتُحفظ وتظهر للمستخدم المعني داخل النظام، لكن لا يوجد إرسال SMS/بريد فعلي حالياً (يمكن ربطه بسهولة بخدمة مثل Twilio/SendGrid عبر `server/api.mjs`).
+- **تطبيق الجوال:** يعمل بالكامل من المتصفح (Progressive Web App قابل للإضافة للشاشة الرئيسية)، وليس تطبيقاً منشوراً على App Store/Google Play — ذلك يتطلب حسابات مطوّرين وتوقيعاً رسمياً من Apple/Google.
+- **قاعدة البيانات:** SQLite حقيقية على القرص — مناسبة تماماً للتشغيل والتجربة والنشر على خادم واحد. لحجم إنتاج كبير مع خوادم متعددة، الخطوة التالية الاعتيادية هي الانتقال إلى PostgreSQL (طبقة `server/api.mjs` مكتوبة بحيث تبديل قاعدة البيانات يمس ملف `server/db.mjs` بشكل رئيسي).
+
+## الانتقال للإنتاج الفعلي
+
+مجلد `deploy/` فيه الملفات الجاهزة لثلاث طرق نشر شائعة — اختر وحدة:
+
+| الطريقة | الملفات | يناسب |
+|---|---|---|
+| **Docker** | `Dockerfile`, `docker-compose.yml` (بجذر المشروع) | Railway, Render, Fly.io، أو أي VPS يدعم Docker |
+| **VPS مباشر (systemd)** | `deploy/ejari.service` | خادم أوبنتو/دبيان تتحكم فيه بنفسك |
+| **بروكسي عكسي + HTTPS** | `deploy/Caddyfile` أو `deploy/nginx.conf` | إلزامي لأي نشر حقيقي بنطاق (domain) |
+
+**مثال كامل على VPS (أوبنتو):**
+```bash
+git clone <repo> /opt/ejari-platform      # أو ارفع المجلد بأي طريقة
+cd /opt/ejari-platform
+sudo cp deploy/ejari.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now ejari
+# ثم HTTPS تلقائي بـCaddy:
+sudo caddy run --config deploy/Caddyfile
+```
+
+**مثال بـDocker (يعمل محلياً أو على أي منصة تدعم Docker):**
+```bash
+docker compose up -d --build
+```
+هذا يحفظ `data/` في Volume دائم تلقائياً — البيانات ما تروح عند إعادة نشر الحاوية.
+
+> ⚠️ **مهم:** المنصات اللي بدون قرص دائم (Vercel, Netlify, Cloudflare Pages) **ما تصلح** لهذا المشروع لأنه خادم دائم بقاعدة بيانات SQLite على القرص، مو Serverless Functions. اختر VPS أو منصة تدعم Persistent Volume (Railway، Render، Fly.io، DigitalOcean App Platform مع Disk).
+
+> ملاحظة: ملفات `deploy/` جاهزة ومبنية على نفس بنية المشروع، لكن لم يتوفر Docker في بيئة الإعداد هذه لاختبار البناء فعلياً — جرّبها أول مرة على استضافتك وأخبرني إذا واجهت أي خطأ لأصلّحه.
+
+بعد أول نشر، الخطوات التالية للإنتاج الفعلي:
+1. **بوابة دفع حقيقية:** استبدل `POST /api/payments/:id/pay` بنداء فعلي لبوابة بنفاذ/الشبكة البنكية.
+2. **رسائل حقيقية:** أضف استدعاء SMS/بريد داخل دوال `notify()` في `server/api.mjs`.
+3. **نسخ احتياطي:** انسخ `data/ejari.db` دورياً (أمر واحد: `cp data/ejari.db backup-$(date +%F).db`).
+4. **الجهات الحكومية:** استبدل شاشة «التكامل» بنداءات API فعلية بعد الحصول على اعتماد تلك الجهات.
+
+## ملاحظات
+
+- القيم الافتراضية (رسوم التسجيل 10 د.ب، رسوم التجديد 5 د.ب) تُعدَّل من شاشة إعدادات الإدارة وتُحفظ فعلياً.
+- أرقام الصفحة الرئيسية التسويقية (+25,000 عقار…) نصية تعريفية بالموقع الأصلي، غير مرتبطة بجداول القاعدة.
+- الشعار مملوك لأصحابه؛ استخدمه وفق صلاحياتك.

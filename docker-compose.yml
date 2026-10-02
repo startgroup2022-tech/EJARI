@@ -7,6 +7,11 @@ services:
     volumes:
       - ejari_data:/app/data   # persistent disk for the SQLite database
     environment:
+      - NODE_ENV=production
       - PORT=4000
+      # First run only: creates the initial super admin (no demo accounts are ever created).
+      # Remove these two lines after the first successful boot, then recreate the container.
+      - EJARI_ADMIN_EMAIL=admin@ejari.bh
+      - EJARI_ADMIN_PASSWORD=change-me-before-first-run
 volumes:
   ejari_data:

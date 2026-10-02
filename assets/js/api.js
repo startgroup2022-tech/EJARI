@@ -50,6 +50,11 @@ function hydrate(boot) {
   if (boot.perm) DB.perm = boot.perm;
   if (boot.fees) DB.fees = boot.fees;
   if (boot.refunds) DB.refunds = boot.refunds;
+  DB.services = boot.services || [];
+  DB.categories = boot.categories || [];
+  DB.posts = boot.posts || [];
+  DB.requests = (boot.requests || []).map((r) => ({ ...r, created: dt(r.created), updated: dt(r.updated), scheduledAt: dt(r.scheduledAt), completedAt: dt(r.completedAt), events: (r.events || []).map((e) => ({ ...e, t: dt(e.t) })) }));
+  DB.notifLog = (boot.notificationLog || []).map((n) => ({ ...n, t: dt(n.t) }));
   TODAY = new Date(); TODAY.setHours(0, 0, 0, 0);
   NOW = new Date();
 }

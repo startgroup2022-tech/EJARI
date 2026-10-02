@@ -1,9 +1,9 @@
 :root{
---bg:#F2F5F9;--sf:#FFFFFF;--sf2:#F7F9FC;--ink:#17253B;--ink2:#4A5B74;--ink3:#7D8CA1;--line:#DEE4EC;--line2:#EAEEF4;
---brand:#0C7D63;--brand2:#096850;--brandsoft:#E2F5EE;--brandtx:#FFFFFF;--mint:#22BB94;--red:#C8262C;
+--bg:#F2F5F9;--sf:#FFFFFF;--sf2:#F7F9FC;--ink:#17253B;--ink2:#4A5B74;--ink3:#5F6E82;--line:#DEE4EC;--line2:#EAEEF4;
+--brand:#0B7359;--brand2:#096850;--brandsoft:#E2F5EE;--brandtx:#FFFFFF;--mint:#22BB94;--red:#C8262C;
 --slate:#4A5B74;--slatesoft:#E8EDF4;
 --pri:#2A3B57;--pritx:#FFFFFF;
---teal:#0C7D63;--tealsoft:#E2F5EE;--gold:#8F6710;--goldsoft:#F6EDD3;
+--teal:#0B7359;--tealsoft:#E2F5EE;--gold:#7C590D;--goldsoft:#F6EDD3;
 --ok:#17794F;--oksoft:#DFF2E8;--warn:#9A5F08;--warnsoft:#FBEED2;--bad:#B3261E;--badsoft:#FCE5E3;--info:#1D5F9E;--infosoft:#E2EEF9;
 --r:14px;--sh:0 16px 40px rgba(16,30,54,.16);
 color-scheme:light;

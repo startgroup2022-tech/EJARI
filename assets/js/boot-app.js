@@ -9,6 +9,7 @@
     closeModal();render();window.scrollTo(0,0);
   };
   (async()=>{
+    try{const cfg=await API.get('/api/config');S.demo=!!cfg.demo}catch(e){S.demo=false}
     try{
       const me=await API.get('/api/auth/me');
       if(me.user&&me.user.role!=='admin'){await onAuthed();return}

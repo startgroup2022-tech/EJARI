@@ -137,14 +137,123 @@ CREATE TABLE IF NOT EXISTS verification_requests(
   user_id INTEGER NOT NULL REFERENCES users(id),
   kind TEXT NOT NULL, property_id INTEGER, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS services(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name_ar TEXT NOT NULL, name_en TEXT NOT NULL,
+  desc_ar TEXT, desc_en TEXT, price REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'BHD',
+  duration_min INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0, icon TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS service_requests(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  no TEXT UNIQUE NOT NULL, service_id INTEGER NOT NULL REFERENCES services(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  provider_id INTEGER REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'new',          -- new|assigned|scheduled|in_progress|done|cancelled
+  amount REAL, notes TEXT, scheduled_at TEXT, completed_at TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS request_events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id INTEGER NOT NULL REFERENCES service_requests(id),
+  from_user INTEGER, kind TEXT, note TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS posts(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  category_id INTEGER REFERENCES categories(id),
+  title_ar TEXT NOT NULL, title_en TEXT NOT NULL,
+  excerpt_ar TEXT, excerpt_en TEXT, body_ar TEXT, body_en TEXT,
+  published INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS categories(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name_ar TEXT NOT NULL, name_en TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS media(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT, mime TEXT, data_url TEXT, size_kb INTEGER, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notification_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  audience TEXT, audience_label TEXT, title_ar TEXT, title_en TEXT,
+  body_ar TEXT, body_en TEXT, recipients INTEGER NOT NULL DEFAULT 0,
+  sent_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL
+);
 `);
 
 const now = () => new Date().toISOString();
 const count = (t) => db.prepare(`SELECT COUNT(*) c FROM ${t}`).get().c;
 
+// Demo/test data is only ever created outside production. A production database is
+// initialised empty — only the authorization config (roles/permissions/settings) and, when
+// EJARI_ADMIN_EMAIL/EJARI_ADMIN_PASSWORD are supplied, a single super admin are created.
+// No demo users, properties, contracts, payments or transactions are ever inserted in production.
+const IS_PROD = process.env.NODE_ENV === 'production';
+const SEED = !IS_PROD || process.env.EJARI_SEED === '1';
+
+function bootstrapSystem() {
+  const PERMS = ['users.view', 'users.manage', 'verify', 'contracts.review', 'contracts.terminate', 'payments.view', 'payments.refund', 'fees.config', 'tickets', 'content', 'integrations', 'reports', 'audit', 'roles', 'settings'];
+  if (count('roles') === 0) {
+    const insR = db.prepare('INSERT INTO roles(id,name_ar,name_en,editable) VALUES (?,?,?,?)');
+    insR.run('super', 'مدير النظام', 'Super admin', 0);
+    insR.run('legal', 'مراجع قانوني', 'Legal reviewer', 1);
+    insR.run('finance', 'مالي', 'Finance', 1);
+    insR.run('support', 'دعم فني', 'Support', 1);
+    const grant = { super: PERMS, legal: ['users.view', 'verify', 'contracts.review', 'contracts.terminate', 'tickets', 'audit'], finance: ['users.view', 'payments.view', 'payments.refund', 'fees.config', 'reports', 'audit'], support: ['users.view', 'tickets', 'content'] };
+    const insRP = db.prepare('INSERT INTO role_permissions(role_id,perm,allowed) VALUES (?,?,?)');
+    for (const role of Object.keys(grant)) for (const p of PERMS) insRP.run(role, p, grant[role].includes(p) ? 1 : 0);
+  }
+  const insSet = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
+  for (const [k, v] of [['fee_registration', '10'], ['fee_renewal', '5'], ['remind_days', '3'], ['late_repeat_days', '5'], ['two_factor_required', '1'], ['session_timeout_min', '30'], ['retention_months', '60'], ['maintenance_mode', '0']]) insSet.run(k, v);
+
+  if (count('users') === 0) {
+    const email = String(process.env.EJARI_ADMIN_EMAIL || '').toLowerCase().trim();
+    const password = String(process.env.EJARI_ADMIN_PASSWORD || '');
+    if (!email || password.length < 8) {
+      console.warn('\n  ⚠  No administrator account exists and EJARI_ADMIN_EMAIL / EJARI_ADMIN_PASSWORD are not set.');
+      console.warn('     Set both (password ≥ 8 characters) and restart to create the first super admin.');
+      console.warn('     No demo or default-password account was created.\n');
+    } else {
+      const name = String(process.env.EJARI_ADMIN_NAME || 'Platform administrator').trim();
+      db.prepare(`INSERT INTO users(role,sub_role,name_ar,name_en,cpr,phone,email,password_hash,status,verified,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+        .run('admin', 'super', name, name, null, null, email, hashPassword(password), 'active', 1, now());
+      console.log(`  ✔  Created the initial super admin: ${email}`);
+    }
+  }
+}
+
 if (count('users') === 0) {
-  console.log('Seeding database with demo data (first run)…');
-  seed();
+  if (SEED) {
+    console.log('Seeding database with demo data (development/test only)…');
+    seed();
+  } else {
+    console.log('Initialising an empty production database — no demo data is created.');
+    bootstrapSystem();
+  }
+} else {
+  // Existing database from an earlier version: make sure the newer catalogue tables exist.
+  // Demo content is never injected into a production database.
+  if (SEED) {
+    try {
+      const ids = {};
+      for (const u of db.prepare('SELECT id, email FROM users').all()) {
+        if (u.email === 'rashed.almanai@example.bh') ids.landlord = u.id;
+        if (u.email === 'sara.aldosari@example.bh') ids.tenant = u.id;
+        if (u.email === 'fatima.alhammadi@ejari.bh') ids.admin = u.id;
+        if (u.email === 'hasan.bukhowa@ejari.bh') ids.admin2 = u.id;
+        if (u.email === 'zainab.almahroos@ejari.bh') ids.admin3 = u.id;
+      }
+      if (ids.admin) seedCatalog(ids);
+    } catch (e) { console.error('Catalog back-fill skipped:', e.message); }
+  } else {
+    bootstrapSystem(); // ensure roles/permissions/settings exist for a live database
+  }
+}
+
+// Additive column migrations — no destructive change to existing data.
+for (const [table, col, type] of [['audit_log', 'before_value', 'TEXT'], ['audit_log', 'after_value', 'TEXT']]) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
 }
 
 function seed() {
@@ -317,7 +426,55 @@ function seed() {
   insSet.run('fee_registration', '10'); insSet.run('fee_renewal', '5'); insSet.run('remind_days', '3'); insSet.run('late_repeat_days', '5');
   insSet.run('two_factor_required', '1'); insSet.run('session_timeout_min', '30'); insSet.run('retention_months', '60'); insSet.run('maintenance_mode', '0');
 
+  // ---- service catalogue, categories, content, and sample requests ----
+  seedCatalog(uid);
+
   console.log(`Seed complete: ${count('users')} users, ${count('properties')} properties, ${count('contracts')} contracts, ${count('payments')} payments.`);
+}
+
+// Seeds the newer tables. Safe to call on an existing database: each block is guarded,
+// so an older data/ejari.db that predates these tables gets back-filled on next start.
+function seedCatalog(uid) {
+  if (count('services') === 0) {
+    const insSvc = db.prepare(`INSERT INTO services(name_ar,name_en,desc_ar,desc_en,price,currency,duration_min,active,sort_order,icon,created_at) VALUES (?,?,?,?,?,?,?,1,?,?,?)`);
+    const SVC = (ar, en, da, de, price, dur, order, icon) => insSvc.run(ar, en, da, de, price, 'BHD', dur, order, icon, now());
+    SVC('صياغة عقد إيجار', 'Lease drafting', 'إعداد عقد إيجار سكني أو تجاري وفق النموذج المعتمد.', 'Prepare a residential or commercial lease from the approved template.', 15, 30, 1, 'file');
+    SVC('استشارة عقارية', 'Property consultation', 'استشارة قانونية أو عقارية مع مختص معتمد.', 'Legal or property consultation with an accredited specialist.', 25, 45, 2, 'users');
+    SVC('توثيق سند ملكية', 'Title-deed verification', 'مراجعة وتوثيق سند الملكية للعقار.', 'Review and verify a property title deed.', 10, 20, 3, 'shield');
+    SVC('معاينة وحدة', 'Unit inspection', 'معاينة حالة الوحدة قبل التسليم أو الاستلام.', 'Inspect a unit’s condition before hand-over.', 12, 40, 4, 'search');
+    SVC('وساطة نزاع إيجاري', 'Lease dispute mediation', 'وساطة بين المؤجر والمستأجر لحل النزاع ودياً.', 'Mediate between landlord and tenant to resolve a dispute.', 30, 60, 5, 'alert');
+    SVC('مراجعة قانونية للعقد', 'Contract legal review', 'مراجعة قانونية دقيقة لبنود العقد.', 'Detailed legal review of the lease terms.', 20, 30, 6, 'pen');
+  }
+  if (count('categories') === 0) {
+    const insCat = db.prepare(`INSERT INTO categories(name_ar,name_en,sort_order) VALUES (?,?,?)`);
+    insCat.run('أخبار', 'News', 1); insCat.run('أدلة', 'Guides', 2); insCat.run('أنظمة', 'Regulations', 3);
+  }
+  if (count('posts') === 0) {
+    const news = db.prepare("SELECT id FROM categories WHERE name_en='News'").get();
+    const guide = db.prepare("SELECT id FROM categories WHERE name_en='Guides'").get();
+    const reg = db.prepare("SELECT id FROM categories WHERE name_en='Regulations'").get();
+    const insPost = db.prepare(`INSERT INTO posts(category_id,title_ar,title_en,excerpt_ar,excerpt_en,body_ar,body_en,published,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,?,?)`);
+    insPost.run(reg.id, 'تحديثات على لائحة الإيجارات', 'Updates to the rent schedule', 'ملخص أهم التعديلات على أحكام الإيجار.', 'A summary of the key changes to rental provisions.', 'نُشرت تحديثات على لائحة الإيجارات تشمل آليات التجديد وزيادة القيمة الإيجارية. يُنصح المؤجرون والمستأجرون بمراجعة بنود عقودهم الحالية.', 'Updates to the rent schedule cover renewal mechanics and rent increases. Landlords and tenants are advised to review their current lease terms.', now(), now());
+    insPost.run(guide.id, 'دليل المستأجر الجديد', 'New tenant guide', 'خطوات عملية من البحث عن وحدة حتى التوقيع.', 'Practical steps from finding a unit to signing.', 'يشرح هذا الدليل رحلة المستأجر: البحث عن الوحدة، التحقق من العقد، التوقيع الإلكتروني، ثم دفع رسوم التسجيل.', 'This guide walks through the tenant journey: finding a unit, verifying the contract, e-signing, then paying the registration fee.', now(), now());
+    insPost.run(news.id, 'إطلاق التحقق الفوري من العقود', 'Instant contract verification launched', 'تحقق من صحة أي عقد برقمه دون كشف بيانات شخصية.', 'Verify any lease by its number without exposing personal data.', 'أصبح بإمكان أي طرف التحقق من صحة عقد إيجار مسجّل في المنصة باستخدام رقم العقد فقط، مع الحفاظ على خصوصية بيانات الأطراف.', 'Any party can now verify a lease registered on the platform using only its number, while preserving the parties’ privacy.', now(), now());
+  }
+  if (count('service_requests') === 0) {
+    const svcId = (en) => db.prepare('SELECT id FROM services WHERE name_en=?').get(en).id;
+    const insReq = db.prepare(`INSERT INTO service_requests(no,service_id,user_id,provider_id,status,amount,notes,scheduled_at,completed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+    const insEv = db.prepare(`INSERT INTO request_events(request_id,from_user,kind,note,created_at) VALUES (?,?,?,?,?)`);
+    const d = (y, m, day) => `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const REQ = (no, s, user, prov, status, amount, notes, sched, done, created) => {
+      const id = Number(insReq.run(no, svcId(s), uid[user], prov ? uid[prov] : null, status, amount, notes, sched, done, created, created).lastInsertRowid);
+      insEv.run(id, uid[user], 'created', 'تم إنشاء الطلب', created);
+      if (status !== 'new') insEv.run(id, uid.admin, 'assigned', 'تم تعيين مختص', created);
+      if (['scheduled', 'in_progress', 'done'].includes(status)) insEv.run(id, uid[prov] || uid.admin, 'scheduled', 'تم تحديد الموعد', created);
+      if (status === 'done') insEv.run(id, uid[prov] || uid.admin, 'done', 'تم إنجاز الطلب', done || created);
+    };
+    REQ('SR-2026-00001', 'Property consultation', 'tenant', 'admin2', 'scheduled', 25, 'استشارة حول تجديد العقد', d(2026, 10, 8), null, d(2026, 9, 20));
+    REQ('SR-2026-00002', 'Title-deed verification', 'landlord', 'admin3', 'done', 10, 'توثيق سند ملكية برج لؤلؤة المحرق', d(2026, 9, 25), d(2026, 9, 25), d(2026, 9, 18));
+    REQ('SR-2026-00003', 'Lease drafting', 'landlord', null, 'new', 15, 'صياغة عقد إيجار جديد لوحدة 15', null, null, d(2026, 9, 22));
+    REQ('SR-2026-00004', 'Lease dispute mediation', 'tenant', 'admin2', 'in_progress', 30, 'وساطة في نزاع استرداد التأمين', null, null, d(2026, 9, 19));
+  }
 }
 
 export const nowIso = now;

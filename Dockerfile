@@ -4,6 +4,7 @@ WORKDIR /app
 COPY . .
 RUN rm -rf data/*.db* tests docs
 VOLUME ["/app/data"]
+ENV NODE_ENV=production
 ENV PORT=4000
 EXPOSE 4000
 CMD ["node", "server.mjs"]

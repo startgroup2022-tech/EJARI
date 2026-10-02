@@ -1,0 +1,13 @@
+.git
+.gitignore
+data
+tests
+docs
+deploy
+dist
+mobile
+.agents
+.dockerignore
+Dockerfile
+docker-compose.yml
+*.md

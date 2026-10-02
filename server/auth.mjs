@@ -16,11 +16,6 @@ export function verifyPassword(password, stored) {
   return hash.length === test.length && crypto.timingSafeEqual(hash, test);
 }
 
-export function newToken() {
-  return crypto.randomBytes32().toString('hex');
-}
-crypto.randomBytes32 = () => crypto.randomBytes(32);
-
 export function parseCookies(header) {
   const out = {};
   if (!header) return out;
@@ -31,10 +26,3 @@ export function parseCookies(header) {
   }
   return out;
 }
-
-export function sessionCookie(token, maxAgeSec) {
-  const attrs = [`ejari_session=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSec}`];
-  return attrs.join('; ');
-}
-
-export const clearCookie = () => 'ejari_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0';

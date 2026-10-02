@@ -1,5 +1,16 @@
-# Reverse proxy with automatic free HTTPS (Let's Encrypt). Replace the domain, then:
+# Reverse proxy with automatic free HTTPS (Let's Encrypt).
 #   sudo caddy run --config deploy/Caddyfile
-ejari.yourdomain.com {
+# Replace the domain with the real hostname before running (staging here: test.ejari.bh).
+test.ejari.bh {
+    encode zstd gzip
     reverse_proxy localhost:4000
+
+    header {
+        # HTTP -> HTTPS is handled automatically by Caddy (redirect).
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "same-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    }
 }

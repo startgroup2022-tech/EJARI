@@ -1,13 +1,20 @@
 'use strict';
 /* ===== state ===== */
 let onAuthed=async()=>{}; // overridden per entry point (website/dashboard/app) once auth.js + the boot script load
-const S={lang:'ar',theme:'auto',page:'landing',role:null,uid:null,dispName:null,view:'overview',nav:false,pop:null,modal:null,
-  f:{contracts:{q:'',st:'all'},payments:{q:'',st:'all'},users:{q:'',role:'all',st:'all'},maint:{q:''},docs:{t:'all'},notif:{t:'all'},faq:{q:''},audit:{q:''},props:{q:''},tickets:{st:'all'},ledger:{q:''}},
-  tab:{},cal:{y:2026,m:8},svc:0,pending:null,lnav:false,expanded:null};
+const S={lang:'ar',theme:'auto',page:'landing',role:null,uid:null,dispName:null,view:'overview',nav:false,pop:null,modal:null,demo:null,
+  f:{contracts:{q:'',st:'all'},payments:{q:'',st:'all'},users:{q:'',role:'all',st:'all'},maint:{q:''},docs:{t:'all'},notif:{t:'all'},faq:{q:''},audit:{q:''},props:{q:''},tickets:{st:'all'},ledger:{q:''},req:{q:'',st:'all'},svc:{q:''},content:{q:''}},
+  tab:{},cal:{y:2026,m:8},svc:0,pending:null,lnav:false,expanded:null,pg:{}};
+/* Demo sign-in is enabled only when the server reports it via /api/config. In production it is
+   false, so no demo UI is ever rendered and no demo endpoint is offered. */
+const demoOn=()=>S.demo===true;
 const $=(s,r)=> (r||document).querySelector(s);
 const T=(ar,en)=>S.lang==='ar'?ar:en;
-const L=o=>o==null?'':typeof o==='string'?o:(o[S.lang]||o.ar);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* Pick the active-language string. Returns ESCAPED text: every value that reaches the DOM
+   goes through this helper, so user-controlled names/titles/notes cannot inject markup.
+   Callers that need the raw value (logic, comparisons) must use rawL() instead. */
+const rawL=o=>o==null?'':typeof o==='string'?o:(o[S.lang]||o.ar);
+const L=o=>esc(rawL(o));
 const fmt=n=>Number(n).toLocaleString('en-US');
 const cur=()=>T('د.ب','BD');
 const money=n=>S.lang==='ar'?`${fmt(n)} د.ب`:`BD ${fmt(n)}`;
@@ -64,7 +71,7 @@ zap:'M13 2L4 14h7l-1 8 9-12h-7z',layers:'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5',
 const ic=(n,s=18)=>`<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${IC[n]||IC.info}"/></svg>`;
 
 /* ===== ui primitives ===== */
-const chip=(t,k)=>`<span class="chip ${k||''}">${t}</span>`;
+const chip=(t,k)=>`<span class="chip ${k||''}">${esc(t)}</span>`;
 const ava=(n,cls)=>`<span class="av ${cls||''}">${esc(initials(n))}</span>`;
 const empty=(t,d,i)=>`<div class="empty">${ic(i||'folder',34)}<b>${t}</b>${d?`<div>${d}</div>`:''}</div>`;
 const btn=(label,a,data,cls,icon)=>`<button class="btn ${cls||''}" data-a="${a}" ${Object.entries(data||{}).map(([k,v])=>`data-${k}="${esc(v)}"`).join(' ')}>${icon?ic(icon,cls&&cls.includes('sm')?15:17):''}${label}</button>`;
@@ -80,12 +87,25 @@ function table(cols,rows,emptyHtml){
   if(!rows.length) return `<div class="card">${emptyHtml||empty(T('لا توجد نتائج','No results'),T('جرّب تغيير الفلاتر أو البحث','Try changing the filters or search'),'search')}</div>`;
   return `<div class="tw"><table class="rt"><thead><tr>${cols.map(c=>`<th class="${c.c||''}">${c.h}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr ${r._a?`class="click" data-a="${r._a}" data-id="${esc(r.id)}"`:''}>${cols.map(c=>`<td data-label="${esc(c.h)}" class="${c.c||''}">${c.f(r)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
-function toast(msg,err){
+function toast(msg,err,action){
   let box=$('#toasts'); if(!box) return;
   const el=document.createElement('div'); el.className='toast'+(err?' err':'');
-  el.innerHTML=`${ic(err?'alert':'check',18)}<span>${msg}</span>`; box.appendChild(el);
-  setTimeout(()=>{el.style.opacity='0';el.style.transition='opacity .25s';setTimeout(()=>el.remove(),260)},2800);
+  el.innerHTML=`${ic(err?'alert':'check',18)}<span>${esc(msg)}</span>${action?`<button class="btn sm ghost" data-a="${esc(action.a)}" data-id="${esc(action.id||'')}">${esc(action.label)}</button>`:''}`; box.appendChild(el);
+  setTimeout(()=>{el.style.opacity='0';el.style.transition='opacity .25s';setTimeout(()=>el.remove(),260)},action?5200:2800);
 }
+/* skeleton placeholders shown while a view's data is being (re)loaded */
+const skeleton=(rows=3)=>`<div class="card sk"><div class="cb col">${Array.from({length:rows}).map(()=>`<div class="sk-row"><span class="sk-b sk-av"></span><span class="sk-b sk-l"></span><span class="sk-b sk-s"></span></div>`).join('')}</div></div>`;
+/* client-side pagination: returns the slice for the current page plus the pager markup */
+const PAGE_SIZE=8;
+function paginate(items,key){
+  const total=items.length,pages=Math.max(1,Math.ceil(total/PAGE_SIZE));
+  const p=Math.min(Math.max(1,S.pg[key]||1),pages);
+  return {slice:items.slice((p-1)*PAGE_SIZE,p*PAGE_SIZE),pager:pages>1?`<div class="pager"><span class="xs mut3">${T(`${total} عنصر`,`${total} items`)}</span><span class="sp"></span>${Array.from({length:pages}).map((_,i)=>`<button class="btn sm ${i+1===p?'pri':'ghost'}" data-a="page" data-k="${key}" data-v="${i+1}">${i+1}</button>`).join('')}</div>`:''};
+}
+/* server-driven permission check for the signed-in admin sub-role (mirrors the backend) */
+const can=(perm)=>{if(!DB.perm||!DB.roles)return false;const u=curUser&&curUser();if(!u||u.role!=='admin')return false;const sub=u.sub||'super';if(sub==='super')return true;return !!(DB.perm[sub]&&DB.perm[sub][perm]);};
+/* trigger a real file download from an authenticated endpoint */
+function download(path){const a=document.createElement('a');a.href=path;a.rel='noopener';document.body.appendChild(a);a.click();a.remove();}
 
 /* ===== charts (inline svg) ===== */
 function niceMax(v){if(v<=0)return 4;const raw=v/4;const p=Math.pow(10,Math.floor(Math.log10(raw)));const n=raw/p;const st=(n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*p;return st*4}
@@ -118,13 +138,56 @@ function donut(parts,centerTop,centerSub){
   s+=`<text x="70" y="70" text-anchor="middle" style="font-size:22px;font-weight:600;fill:var(--ink)">${centerTop}</text><text x="70" y="88" text-anchor="middle" style="font-size:11px">${centerSub||''}</text></svg>`;return s;
 }
 function hbars(items,color){const mx=Math.max(1,...items.map(i=>i.v));return items.map(i=>`<div class="hb"><span class="mut">${esc(i.l)}</span><div class="pg"><i style="width:${i.v/mx*100}%;${color?`background:${color}`:''}"></i></div><b class="num">${i.t!=null?i.t:fmt(i.v)}</b></div>`).join('')}
+/* ===== real QR encoder (byte mode, versions 1..3, EC level L, mask 0) ===== */
+const _QREXP=new Uint8Array(512),_QRLOG=new Uint8Array(256);
+(function(){let x=1;for(let i=0;i<255;i++){_QREXP[i]=x;_QRLOG[x]=i;x<<=1;if(x&0x100)x^=0x11d}for(let i=255;i<512;i++)_QREXP[i]=_QREXP[i-255]})();
+const _qmul=(a,b)=>(a===0||b===0?0:_QREXP[_QRLOG[a]+_QRLOG[b]]);
+function _qrGen(deg){let p=[1];for(let i=0;i<deg;i++){const n=new Array(p.length+1).fill(0);for(let j=0;j<p.length;j++){n[j]^=p[j];n[j+1]=_qmul(p[j],_QREXP[i])}p=n}return p}
+function _qrEC(data,len){const g=_qrGen(len),r=new Array(len).fill(0);for(const b of data){const f=b^r[0];r.shift();r.push(0);for(let i=0;i<len;i++)r[i]^=_qmul(g[i+1],f)}return r}
+const _QRSZ={1:[26,19],2:[44,34],3:[70,55]},_QRALIGN={1:[],2:[6,18],3:[6,22]};
+function qrMatrix(text){
+  const bytes=[];for(const ch of unescape(encodeURIComponent(String(text))))bytes.push(ch.charCodeAt(0));
+  let ver=0;for(const v of [1,2,3])if(bytes.length<=_QRSZ[v][1]-2){ver=v;break}
+  if(!ver)throw new Error('qr_too_long');
+  const [total,dataCw]=_QRSZ[ver];
+  const bits=[];const push=(v,l)=>{for(let i=l-1;i>=0;i--)bits.push((v>>i)&1)};
+  push(0b0100,4);push(bytes.length,8);for(const b of bytes)push(b,8);
+  for(let i=0;i<4&&bits.length<dataCw*8;i++)bits.push(0);
+  while(bits.length%8)bits.push(0);
+  const cw=[];for(let i=0;i<bits.length;i+=8){let v=0;for(let j=0;j<8;j++)v=(v<<1)|bits[i+j];cw.push(v)}
+  for(let i=0;cw.length<dataCw;i++)cw.push([0xEC,0x11][i%2]);
+  const msg=cw.concat(_qrEC(cw,total-dataCw));
+  const size=ver*4+17;
+  const m=Array.from({length:size},()=>new Array(size).fill(false));
+  const res=Array.from({length:size},()=>new Array(size).fill(false));
+  const set=(r,c,v)=>{if(r>=0&&c>=0&&r<size&&c<size){m[r][c]=v;res[r][c]=true}};
+  const finder=(r0,c0)=>{for(let r=-1;r<=7;r++)for(let c=-1;c<=7;c++){const rr=r0+r,cc=c0+c;if(rr<0||cc<0||rr>=size||cc>=size)continue;const on=(r>=0&&r<=6&&(c===0||c===6))||(c>=0&&c<=6&&(r===0||r===6))||(r>=2&&r<=4&&c>=2&&c<=4);set(rr,cc,on)}};
+  finder(0,0);finder(0,size-7);finder(size-7,0);
+  for(let i=8;i<size-8;i++){set(6,i,i%2===0);set(i,6,i%2===0)}
+  for(const r of _QRALIGN[ver])for(const c of _QRALIGN[ver]){if((r<=8&&c<=8)||(r<=8&&c>=size-9)||(r>=size-9&&c<=8))continue;for(let dr=-2;dr<=2;dr++)for(let dc=-2;dc<=2;dc++)set(r+dr,c+dc,Math.max(Math.abs(dr),Math.abs(dc))!==1)}
+  set(size-8,8,true);
+  for(let i=0;i<9;i++){res[8][i]=true;res[i][8]=true}
+  for(let i=0;i<8;i++){res[8][size-1-i]=true;res[size-1-i][8]=true}
+  const dbits=[];for(const w of msg)for(let i=7;i>=0;i--)dbits.push((w>>i)&1);
+  let dir=-1,row=size-1,bi=0;
+  for(let col=size-1;col>0;col-=2){const c0=col<=6?col-1:col;
+    for(let i=0;i<size;i++){const r=dir===-1?row-i:row+i;
+      for(const c of [c0,c0-1]){if(res[r][c])continue;let bit=bi<dbits.length?dbits[bi++]:0;if((r+c)%2===0)bit^=1;m[r][c]=bit===1}}
+    dir=-dir;row=dir===-1?size-1:0}
+  const fmtData=(0b01<<3)|0;let rem=fmtData<<10;
+  for(let i=14;i>=10;i--)if((rem>>i)&1)rem^=0b10100110111<<(i-10);
+  const fmt=((fmtData<<10)|rem)^0b101010000010010;const fb=i=>((fmt>>i)&1)===1;
+  for(let i=0;i<15;i++){
+    if(i<6)m[i][8]=fb(i);else if(i<8)m[i+1][8]=fb(i);else m[size-15+i][8]=fb(i);
+    if(i<8)m[8][size-i-1]=fb(i);else if(i<9)m[8][15-i]=fb(i);else m[8][15-i-1]=fb(i)}
+  m[size-8][8]=true;
+  return m;
+}
 function qrSvg(seed){
-  let h=2166136261;for(const ch of String(seed)){h^=ch.charCodeAt(0);h=Math.imul(h,16777619)>>>0}
-  const rnd=()=>{h^=h<<13;h>>>=0;h^=h>>>17;h^=h<<5;h>>>=0;return h/4294967296};
-  const N=21;let cells='';const fin=(x,y)=>{cells+=`<rect x="${x}" y="${y}" width="7" height="7" fill="currentColor"/><rect x="${x+1}" y="${y+1}" width="5" height="5" fill="#fff"/><rect x="${x+2}" y="${y+2}" width="3" height="3" fill="currentColor"/>`};
-  fin(0,0);fin(14,0);fin(0,14);
-  for(let y=0;y<N;y++)for(let x=0;x<N;x++){const inF=(x<8&&y<8)||(x>12&&y<8)||(x<8&&y>12);if(!inF&&rnd()>.52)cells+=`<rect x="${x}" y="${y}" width="1" height="1" fill="currentColor"/>`}
-  return `<div class="qr"><svg viewBox="0 0 21 21" shape-rendering="crispEdges" role="img" aria-label="QR">${cells}</svg></div>`;
+  let m;try{m=qrMatrix(seed)}catch(e){return `<div class="qr qr-fallback" aria-label="${T('رمز التحقق','Verification code')}"><span class="xs mut3">${esc(String(seed))}</span></div>`}
+  const n=m.length;let d='';
+  for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(m[r][c])d+=`M${c} ${r}h1v1h-1z`;
+  return `<div class="qr"><svg viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges" role="img" aria-label="${T('رمز QR للتحقق','QR code for verification')}"><rect width="${n}" height="${n}" fill="#fff"/><path d="${d}" fill="#000"/></svg></div>`;
 }
 const logoImg=(h,mode)=>{const st=h?` style="height:${h}px"`:'';const alt=T('إيجاري','Ejari');
   if(mode==='dark')return `<img class="brandlogo lg-only-d"${st} src="${LOGO_D}" alt="${alt}">`;

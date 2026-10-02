@@ -1,0 +1,44 @@
+name: ejari_mobile
+description: "Ejari (إيجاري) — native Flutter client for the Ejari rental-management platform."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.6.1
+
+  # Networking
+  dio: ^5.7.0
+
+  # Secure session storage (Android Keystore-backed)
+  flutter_secure_storage: ^9.2.2
+
+  # Localization / formatting
+  intl: ^0.20.2
+
+  # Opening downloaded documents in the system viewer
+  open_filex: ^4.6.0
+  path_provider: ^2.1.5
+
+  # Opening server-rendered contract documents / receipts in the system browser
+  url_launcher: ^6.3.1
+
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/

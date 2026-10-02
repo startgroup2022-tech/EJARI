@@ -7,7 +7,13 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node server.mjs 4000",
-    "test": "node tests/smoke.mjs"
+    "test": "node tests/smoke.mjs",
+    "test:security": "node tests/security.mjs",
+    "test:xss": "node tests/xss_browser.mjs",
+    "test:render": "node tests/render.mjs",
+    "test:production": "node tests/production.mjs",
+    "test:ui": "node tests/browser_ui.mjs",
+    "test:all": "node tests/smoke.mjs && node tests/security.mjs && node tests/xss_browser.mjs && node tests/render.mjs && node tests/production.mjs && node tests/browser_ui.mjs"
   },
   "engines": { "node": ">=22.5.0" }
 }

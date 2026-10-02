@@ -1,0 +1,12 @@
+# Ejari — https://ejari.bh
+User-agent: *
+Allow: /$
+Allow: /website.html
+Allow: /index.html
+Allow: /assets/
+Disallow: /dashboard.html
+Disallow: /app.html
+Disallow: /app-screen.html
+Disallow: /api/
+
+Sitemap: https://ejari.bh/sitemap.xml

@@ -247,3 +247,18 @@ table.rt{width:100%;border-collapse:collapse;min-width:640px}
 .tw{box-shadow:0 1px 2px rgba(20,35,60,.04)}
 .rt th{letter-spacing:.01em}
 .assist{box-shadow:0 1px 2px rgba(20,35,60,.04)}
+
+/* ===== service requests, exports & loading states (unified visual identity) ===== */
+.toast .btn{margin-inline-start:6px;background:rgba(255,255,255,.16);color:inherit;border-color:transparent;pointer-events:auto}
+.toast .btn:hover{background:rgba(255,255,255,.28)}
+.pager{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:16px}
+.pager .sp{flex:1}
+.pager .btn{min-width:34px;justify-content:center}
+.prose{line-height:1.85;color:var(--ink2)}
+.prose p{margin:0 0 12px}
+.sk .sk-row{display:flex;align-items:center;gap:14px}
+.sk .sk-b{display:block;height:12px;border-radius:6px;background:linear-gradient(90deg,var(--line2),var(--line),var(--line2));background-size:200% 100%;animation:sk 1.2s linear infinite}
+.sk .sk-av{width:38px;height:38px;border-radius:50%;flex:none}
+.sk .sk-l{flex:1}.sk .sk-s{width:64px}
+@keyframes sk{from{background-position:200% 0}to{background-position:-200% 0}}
+.qr-fallback{display:grid;place-items:center;text-align:center;padding:8px;word-break:break-all;line-height:1.35}

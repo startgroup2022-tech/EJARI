@@ -13,6 +13,11 @@ ExecStart=/usr/bin/node server.mjs 4000
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
+Environment=EJARI_DISABLE_DEMO=1
+# First run only: set these to create the initial super admin, then remove them and restart.
+# No demo accounts are ever created in production.
+Environment=EJARI_ADMIN_EMAIL=admin@ejari.bh
+Environment=EJARI_ADMIN_PASSWORD=change-me-before-first-run
 
 [Install]
 WantedBy=multi-user.target

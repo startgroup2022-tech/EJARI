@@ -17,7 +17,9 @@ const DT = { contract: { ar: 'عقود', en: 'Contracts' }, deed: { ar: 'سند�
 const NTY = { pay: ['card', 'ok'], maint: ['wrench', 'warn'], renew: ['refresh', 'info'], contract: ['file', 'teal'], sys: ['shield', 'brand'] };
 const TCAT = { dispute: { ar: 'نزاع', en: 'Dispute' }, tech: { ar: 'مشكلة تقنية', en: 'Technical' }, account: { ar: 'الحساب', en: 'Account' }, payment: { ar: 'المدفوعات', en: 'Payments' }, contract: { ar: 'العقود', en: 'Contracts' }, other: { ar: 'أخرى', en: 'Other' } };
 const VK = { cpr: { ar: 'الهوية الوطنية', en: 'National ID' }, deed: { ar: 'سند ملكية عقار', en: 'Property title deed' }, cr: { ar: 'السجل التجاري', en: 'Commercial registration' }, phone: { ar: 'رقم الهاتف', en: 'Phone number' } };
-const DB = { users: [], props: [], units: [], contracts: [], payments: [], maint: [], docs: [], notifs: [], faq: [], verif: [], tickets: [], audit: [], templates: [], msgs: [], integ: [], roles: [], perm: {}, refunds: [], autopay: false, fees: { reg: 10, renew: 5, remind: 3, late: 5, twofa: true, session: 30, retention: 60, maintenanceMode: false } };
+const DB = { users: [], props: [], units: [], contracts: [], payments: [], maint: [], docs: [], notifs: [], faq: [], verif: [], tickets: [], audit: [], templates: [], msgs: [], integ: [], roles: [], perm: {}, refunds: [], autopay: false, services: [], categories: [], posts: [], requests: [], notifLog: [], fees: { reg: 10, renew: 5, remind: 3, late: 5, twofa: true, session: 30, retention: 60, maintenanceMode: false } };
+// Service-request lifecycle (shared by tenant, provider and admin screens)
+const RQST = { new: ['جديد', 'New', 'brand'], assigned: ['تم التعيين', 'Assigned', 'info'], scheduled: ['مجدول', 'Scheduled', 'gold'], in_progress: ['قيد التنفيذ', 'In progress', 'warn'], done: ['مكتمل', 'Completed', 'ok'], cancelled: ['ملغى', 'Cancelled', 'bad'] };
 // catalog of permission keys shown on the Roles & Permissions screen (labels only — allow/deny state comes from the server)
 DB.perms = [
   ['users.view', 'عرض المستخدمين', 'View users'], ['users.manage', 'إدارة المستخدمين', 'Manage users'], ['verify', 'اعتماد التوثيق', 'Approve verification'],
@@ -37,7 +39,7 @@ const propOf = (id) => DB.props.find((p) => p.id === id);
 const userOf = (id) => DB.users.find((u) => u.id === id);
 const ctOf = (id) => DB.contracts.find((c) => c.id === id);
 const uname = (id) => { const u = userOf(id); return u ? L(u.name) : '—'; };
-const unitLabel = (u) => `${L(UT[u.type])} ${u.no} · ${L(propOf(u.prop).name)}`;
+const unitLabel = (u) => `${L(UT[u.type])} ${esc(u.no)} · ${L(propOf(u.prop).name)}`;
 const unitStatus = (u) => {
   const cs = DB.contracts.filter((c) => c.unit === u.id);
   if (cs.some((c) => ['active', 'under_review', 'disputed'].includes(c.status) && cst(c) !== 'expired')) return 'occupied';

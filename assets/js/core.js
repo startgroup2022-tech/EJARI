@@ -3,7 +3,7 @@
 let onAuthed=async()=>{}; // overridden per entry point (website/dashboard/app) once auth.js + the boot script load
 const S={lang:'ar',theme:'auto',page:'landing',role:null,uid:null,dispName:null,view:'overview',nav:false,pop:null,modal:null,demo:null,
   f:{contracts:{q:'',st:'all'},payments:{q:'',st:'all'},users:{q:'',role:'all',st:'all'},maint:{q:''},docs:{t:'all'},notif:{t:'all'},faq:{q:''},audit:{q:''},props:{q:''},tickets:{st:'all'},ledger:{q:''},req:{q:'',st:'all'},svc:{q:''},content:{q:''}},
-  tab:{},cal:{y:2026,m:8},svc:0,pending:null,lnav:false,expanded:null,pg:{}};
+  tab:{},cal:null,svc:0,pending:null,lnav:false,expanded:null,pg:{}};
 /* Demo sign-in is enabled only when the server reports it via /api/config. In production it is
    false, so no demo UI is ever rendered and no demo endpoint is offered. */
 const demoOn=()=>S.demo===true;

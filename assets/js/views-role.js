@@ -285,7 +285,8 @@ A.madv=async d=>{const m=DB.maint.find(x=>x.id===d.id);
 /* ===== calendar ===== */
 const DOW=[['الأحد','Sun'],['الاثنين','Mon'],['الثلاثاء','Tue'],['الأربعاء','Wed'],['الخميس','Thu'],['الجمعة','Fri'],['السبت','Sat']];
 V.calendar=()=>{
-  const {y,m}=S.cal;const first=new Date(y,m,1),start=addD(first,-first.getDay());const evs={};const add=(d,c,t)=>{const k=d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate();(evs[k]=evs[k]||[]).push({c,t})};
+  const cal=S.cal||{y:TODAY.getFullYear(),m:TODAY.getMonth()};
+  const {y,m}=cal;const first=new Date(y,m,1),start=addD(first,-first.getDay());const evs={};const add=(d,c,t)=>{const k=d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate();(evs[k]=evs[k]||[]).push({c,t})};
   myPays().filter(p=>p.status!=='upcoming'||true).forEach(p=>{const c=ctOf(p.c);add(p.due,p.status==='paid'?'ok':p.status==='overdue'?'bad':'',(p.kind==='fee'?T('رسوم','Fee'):T('إيجار','Rent'))+' '+(S.role==='landlord'?uname(c.tenant).split(' ')[0]:money(p.amount)))});
   myContracts().forEach(c=>{if(['active','expired'].includes(c.status))add(end(c),'warn',T('ينتهي ','Ends ')+c.no.slice(-3));if(['pending_sign','pending_pay'].includes(c.status))add(c.start,'',T('بداية عقد','Lease starts'))});
   myMaint().forEach(x=>add(x.created,'warn',T('صيانة','Repair')));

@@ -10,7 +10,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=u
 // Only these files/directories are ever served over HTTP. Everything else on disk
 // (the SQLite database, server source, .git, tests, deploy configs) stays private.
 const PUBLIC_DIR = path.join(root, 'assets');
-const PUBLIC_FILES = new Set(['index.html', 'website.html', 'dashboard.html', 'app.html', 'app-screen.html', 'pay.html', 'manifest.webmanifest', 'sw.js', 'favicon.ico', 'robots.txt', 'sitemap.xml']);
+const PUBLIC_FILES = new Set(['index.html', 'website.html', 'dashboard.html', 'app.html', 'app-screen.html', 'pay.html', 'reset.html', 'manifest.webmanifest', 'sw.js', 'favicon.ico', 'robots.txt', 'sitemap.xml']);
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',

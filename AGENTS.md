@@ -17,8 +17,8 @@ Zero external runtime dependencies. Uses only Node's standard library
 ## Layout
 - `server.mjs` — entry point; `node server.mjs [port]` (default 4000).
 - `server/http.mjs` — static file allow-list + REST dispatch + security headers.
-- `server/api.mjs` — all ~80 routes, scoping helpers, rate limiting, CSV/HTML renderers.
-- `server/db.mjs` — schema (28 tables), seeding, migrations/back-fill.
+- `server/api.mjs` — all ~106 routes, scoping helpers, rate limiting, CSV/HTML renderers.
+- `server/db.mjs` — schema (35 tables), seeding, migrations/back-fill.
 - `server/auth.mjs` — scrypt password hashing, session tokens, cookie helpers.
 - `assets/js/*.js` — classic scripts (not ES modules), loaded in a fixed order. Order matters.
 - `assets/css/*.css` — tokens → base → landing → responsive → mobile.
@@ -72,15 +72,16 @@ Rules that matter when editing it:
   against a running server and is skipped unless `EJARI_BASE_URL` is set.
 - **Release builds are debug-signed** (`android/app/build.gradle.kts`). Replace with a real
   signing config before publishing.
-- **Not yet done:** `ios/` is ungenerated (no macOS/Xcode here), and there is no
-  forgot-password flow because the backend exposes no reset endpoint.
+- **Not yet done:** `ios/` is ungenerated (no macOS/Xcode here). The web forgot-password flow
+  exists (`POST /api/auth/forgot-password` + `reset.html`), but the Flutter client does not
+  expose it yet.
 
 
 ## Commands
 ```bash
 npm test                 # 88 end-to-end checks (starts its own server on :4321)
 npm run test:security    # 204 security probes
-npm run test:render      # 154 render-integrity checks
+npm run test:render      # 158 render-integrity checks (views + the admin messaging modal)
 npm run test:production  # 31 production-mode checks (empty DB, real scenario, restart, IP allow-list, PWA assets)
 npm run test:ui          # 17 real-browser UI checks (demo vs production)
 npm run test:gateway     # 70 payment-gateway checks (signed webhooks, refunds, real DB)
@@ -131,10 +132,15 @@ rm -f data/ejari.db*     # reset to seed data (re-seeds on next start, dev only)
 - **Contrast tokens are tuned to WCAG AA.** `tokens.css` light `--ink3`, `--brand`/`--teal`
   and `--gold` were darkened so muted text and colored chips clear 4.5:1 on their surfaces.
   Re-check contrast before changing any of those values; dark theme already passes.
+- **Bump the service-worker cache version when shipping JS/CSS changes.** `sw.js` serves static
+  assets cache-first, and the browser also HTTP-caches `sw.js` itself (the server sends
+  `Cache-Control: no-cache`), so a changed script can stay invisible for a reload or two. Editing
+  any file in `SHELL` requires bumping `VERSION` (e.g. `ejari-v3` → `ejari-v4`); without it the
+  fix works in tests (which load from disk) but not in a browser that already has the SW installed.
 
 ## Server rules to respect
-- `add()` handlers are **synchronous**. Never pass an `async` handler — `http.mjs` does not
-  await it and the response will hang. Use `node:sqlite`'s synchronous API only.
+- `add()` handlers may be sync or `async` — `http.mjs` awaits `route.handler(req)`. Use
+  `node:sqlite`'s synchronous API for database work regardless.
 - Admin-only writes gate on `hasPerm(req, '<perm>')` (checks `requireAdmin` + `role_permissions`).
 - Row-level access: `myContractRows(user)`, `myPropertyRows(user)`, `canAccessPayment(u, p)`.
   Reuse these instead of writing new WHERE clauses.

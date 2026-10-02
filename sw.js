@@ -5,7 +5,7 @@
  *   • Navigations: network-first with an offline fallback to the cached app shell.
  *   • Static assets: cache-first (hashed-free but versioned via the cache name).
  */
-const VERSION = 'ejari-v1';
+const VERSION = 'ejari-v3';
 const SHELL = [
   'app-screen.html', 'dashboard.html', 'app.html',
   'assets/css/tokens.css', 'assets/css/base.css', 'assets/css/landing.css',

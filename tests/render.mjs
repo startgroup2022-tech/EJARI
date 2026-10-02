@@ -94,6 +94,38 @@ try {
     // close the tab we opened for this role
     if (tab && tab.id) await fetch(`http://127.0.0.1:${CDP}/json/close/${tab.id}`).catch(() => {});
   }
+
+  // Modals are not covered by the view loop above. Render the admin messaging modal through
+  // its real data path (fetch /api/messaging, hydrate timestamps, then MOD.messaging()) and
+  // assert it produces real content instead of the loading skeleton. Regression guard: an
+  // ISO-string timestamp reaching fdt() used to throw here, leaving the skeleton in place.
+  {
+    // Ensure the outbound log has at least one row so the modal's timestamp path (fdt) is exercised.
+    await call(null, 'POST', '/api/auth/forgot-password', { email: ROLES.tenant.email });
+    const tab = await (await fetch(`http://127.0.0.1:${CDP}/json/new?${encodeURIComponent(BASE + '/dashboard.html')}`, { method: 'PUT' })).json().catch(() => null);
+    let wsUrl = tab && tab.webSocketDebuggerUrl;
+    if (!wsUrl) { const list = await (await fetch(`http://127.0.0.1:${CDP}/json`)).json(); wsUrl = list.find((x) => x.type === 'page').webSocketDebuggerUrl; }
+    const c = cdp(wsUrl); await c.ready;
+    await c.send('Runtime.enable'); await c.send('Network.enable');
+    await c.send('Network.setCookie', { name: 'ejari_session', value: tokens.admin, domain: '127.0.0.1', path: '/', httpOnly: true });
+    await c.send('Page.navigate', { url: BASE + '/dashboard.html' });
+    await sleep(2200);
+    const ev = async (expression) => { const r = await c.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); return r.result && r.result.result ? r.result.result.value : undefined; };
+    const mr = await ev(`(async () => {
+      MSG = null;
+      openModal('messaging', {});
+      await new Promise(r => setTimeout(r, 900));
+      const box = document.querySelector('#modal');
+      const body = box ? String(box.innerHTML) : '';
+      return { len: body.length, skeleton: /sk-b/.test(body), save: body.includes('data-a="msgsave"'), test: body.includes('data-a="msgtest"'), hasLog: /Outbound|سجل الإرسال/.test(body) };
+    })()`);
+    ok(mr && mr.len > 300, 'admin/messaging modal produces real markup');
+    ok(mr && mr.skeleton === false, 'admin/messaging modal shows real content, not the loading skeleton');
+    ok(mr && mr.save && mr.test, 'admin/messaging modal exposes save + test actions');
+    ok(mr && mr.hasLog === true, 'admin/messaging modal renders the outbound log');
+    c.close();
+    if (tab && tab.id) await fetch(`http://127.0.0.1:${CDP}/json/close/${tab.id}`).catch(() => {});
+  }
 } catch (e) { failed++; fails.push('EXCEPTION ' + e.message); console.error('✗ EXCEPTION', e); }
 finally {
   if (chrome) chrome.kill(); server.kill();

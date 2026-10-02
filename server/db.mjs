@@ -218,6 +218,30 @@ CREATE TABLE IF NOT EXISTS webhook_events(
   signature_ok INTEGER NOT NULL DEFAULT 0,
   received_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS password_resets(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  token_hash TEXT NOT NULL,          -- SHA-256 of the one-time token; the token itself is never stored
+  expires_at TEXT NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS provider_settings(
+  kind TEXT PRIMARY KEY,             -- email | sms
+  enabled INTEGER NOT NULL DEFAULT 0,
+  provider TEXT,                     -- smtp | sendgrid | twilio | unifonic | console | null
+  config_enc TEXT,                   -- AES-256-GCM encrypted JSON of provider credentials
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS outbound_messages(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel TEXT NOT NULL,             -- email | sms
+  kind TEXT,                         -- password_reset | payment | refund | contract | otp | generic …
+  to_addr TEXT, subject TEXT, body TEXT,
+  status TEXT NOT NULL,              -- sent | logged | failed | disabled
+  provider TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL, sent_at TEXT
+);
 `);
 
 const now = () => new Date().toISOString();
@@ -308,6 +332,20 @@ for (const [table, col, type] of [
 ]) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+}
+
+// Additive indexes for the newer lookup paths (safe on both a clean and an existing database).
+for (const sql of [
+  'CREATE INDEX IF NOT EXISTS idx_password_resets_hash ON password_resets(token_hash)',
+  'CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_outbound_created ON outbound_messages(created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)',
+]) { try { db.exec(sql); } catch { /* index already present or unsupported */ } }
+
+// Messaging channels start unconfigured and disabled on every database (clean or existing).
+// Nothing is ever sent until an operator configures a provider from the admin console.
+for (const ch of ['email', 'sms']) {
+  db.prepare('INSERT OR IGNORE INTO provider_settings(kind,enabled,provider,config_enc,updated_at) VALUES (?,0,NULL,NULL,?)').run(ch, now());
 }
 
 function seed() {
@@ -462,9 +500,9 @@ function seed() {
   insMsg.run('ms2', 'تأكيد استلام دفعة', 'Payment received', 'تم استلام دفعتك بمبلغ {amount}. رقم الإيصال {receipt}.', 'We received your payment of {amount}. Receipt no. {receipt}.');
 
   const insI = db.prepare(`INSERT INTO integrations(id,name_ar,name_en,desc_ar,desc_en,enabled,status,latency_ms,last_sync_min) VALUES (?,?,?,?,?,1,?,?,?)`);
-  insI.run('i1', 'مؤسسة التنظيم العقاري', 'Real Estate Regulatory Authority', 'التحقق من الملكية وتسجيل العقود', 'Ownership checks and contract registration', 'ok', 310, 2);
-  insI.run('i2', 'هيئة الكهرباء والماء', 'Electricity & Water Authority', 'ربط الحسابات وفواتير الخدمات', 'Account linking and utility bills', 'warn', 2400, 5);
-  insI.run('i3', 'بوابة الدفع (بنفاذ / البطاقات)', 'Payment gateway (Benefit Pay / cards)', 'تحصيل الإيجارات والرسوم', 'Rent and fee collection', 'ok', 180, 1);
+  insI.run('i1', 'مؤسسة التنظيم العقاري', 'Real Estate Regulatory Authority', 'سجل تكامل — يتطلب ربطاً رسمياً مع الجهة (غير متصل حالياً)', 'Integration record — requires a formal connection with the authority (not currently connected)', 'ok', 310, 2);
+  insI.run('i2', 'هيئة الكهرباء والماء', 'Electricity & Water Authority', 'سجل تكامل — يتطلب ربطاً رسمياً مع الجهة (غير متصل حالياً)', 'Integration record — requires a formal connection with the authority (not currently connected)', 'warn', 2400, 5);
+  insI.run('i3', 'بوابة الدفع (بنفاذ / البطاقات / تاب)', 'Payment gateway (Benefit Pay / cards / Tap)', 'مُدارة عبر شاشة بوابات الدفع — المحوّل الحقيقي الوحيد', 'Managed from the Payment gateways screen — the only real adapter', 'ok', 180, 1);
 
   const insR = db.prepare(`INSERT INTO roles(id,name_ar,name_en,editable) VALUES (?,?,?,?)`);
   insR.run('super', 'مدير النظام', 'Super admin', 0);

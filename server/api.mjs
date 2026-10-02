@@ -1,6 +1,7 @@
 import { db, nowIso } from './db.mjs';
 import { hashPassword, verifyPassword, parseCookies } from './auth.mjs';
 import { providerCatalogue, providerMeta, encryptJson, decryptJson, verifySignature, verifyTapWebhook, mapProviderStatus, formatAmount, currencyDecimals } from './gateways.mjs';
+import { messagingCatalogue, maskChannelSettings, saveChannelSettings, testChannel, dispatch } from './messaging.mjs';
 import crypto from 'node:crypto';
 
 db.exec(`CREATE TABLE IF NOT EXISTS user_prefs(user_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY(user_id,key));`);
@@ -71,7 +72,7 @@ const mapTicket = (t) => ({
 const mapFaq = (f) => ({ id: S(f.id), pub: bool(f.published), q: { ar: f.q_ar, en: f.q_en }, a: { ar: f.a_ar, en: f.a_en } });
 const mapTpl = (t) => ({ id: t.id, name: { ar: t.name_ar, en: t.name_en }, ver: t.version, upd: t.updated_at, pub: bool(t.published), uses: t.uses });
 const mapMsg = (m) => ({ id: m.id, ev: { ar: m.event_ar, en: m.event_en }, ar: m.text_ar, en: m.text_en });
-const mapInteg = (i) => ({ id: i.id, name: { ar: i.name_ar, en: i.name_en }, desc: { ar: i.desc_ar, en: i.desc_en }, on: bool(i.enabled), st: i.enabled ? i.status : 'off', ms: i.latency_ms, last: i.last_sync_min });
+const mapInteg = (i) => ({ id: i.id, name: { ar: i.name_ar, en: i.name_en }, desc: { ar: i.desc_ar, en: i.desc_en }, on: bool(i.enabled), st: i.enabled ? i.status : 'off', ms: i.latency_ms, last: i.last_sync_min, kind: INTEGRATION_KIND[i.id] || 'config' });
 const mapRole = (r) => ({ id: r.id, ar: r.name_ar, en: r.name_en, editable: bool(r.editable) });
 const mapVerif = (v) => ({ id: S(v.id), u: S(v.user_id), kind: v.kind, prop: v.property_id ? S(v.property_id) : null, t: v.created_at });
 const mapRefund = (r) => ({ id: r.id, c: S(r.contract_id), amount: r.amount, why: { ar: r.reason_ar, en: r.reason_en }, st: r.status });
@@ -785,6 +786,10 @@ add('POST', '/api/messages/:id', true, (req) => {
 });
 
 // ================= INTEGRATIONS (admin) =================
+// Honest classification of each catalogue entry. Only the payment entry is backed by a real
+// adapter (the gateway subsystem); the government entries are configuration records that do
+// not call any external system. See README "Government / bank integrations".
+const INTEGRATION_KIND = { i1: 'config', i2: 'config', i3: 'gateway' };
 add('POST', '/api/integrations/:id/toggle', true, (req) => {
   if (!hasPerm(req, 'integrations')) return { status: 403, body: { error: 'forbidden' } };
   const i = db.prepare('SELECT * FROM integrations WHERE id=?').get(req.params.id);
@@ -797,7 +802,16 @@ add('POST', '/api/integrations/:id/toggle', true, (req) => {
 add('POST', '/api/integrations/:id/test', true, (req) => {
   if (!hasPerm(req, 'integrations')) return { status: 403, body: { error: 'forbidden' } };
   const i = db.prepare('SELECT * FROM integrations WHERE id=?').get(req.params.id); if (!i) return { status: 404, body: { error: 'not_found' } };
-  return { status: 200, body: { ok: i.enabled === 1, ms: i.latency_ms, status: i.status } };
+  // Honest result: these are configuration records, not live API clients. Enabling one does not
+  // prove connectivity to any external system, so the probe never reports a fake round-trip.
+  const kind = INTEGRATION_KIND[i.id] || 'config';
+  return { status: 200, body: {
+    ok: i.enabled === 1,
+    kind,
+    reachable: kind === 'gateway',
+    note: kind === 'gateway' ? 'handled_by_payment_gateway' : 'configuration_only_no_external_call',
+    ms: i.latency_ms, status: i.status,
+  } };
 });
 
 // ================= ROLES / PERMISSIONS (admin) =================
@@ -837,6 +851,41 @@ add('POST', '/api/settings', true, (req) => {
   auditChange(req.user.id, 'حفظ إعدادات النظام', 'Saved system settings', 'settings', null, changed);
   return { status: 200, body: { ok: true, settings: settingsSnapshot() } };
 });
+
+// ================= MESSAGING PROVIDERS (admin) =================
+// Provider-agnostic email/SMS configuration. Channels start disabled with no provider, so
+// nothing is ever sent until an operator configures one. Credentials are stored encrypted
+// and only ever returned to the client as a mask.
+add('GET', '/api/messaging', true, (req) => {
+  if (!hasPerm(req, 'settings')) return { status: 403, body: { error: 'forbidden' } };
+  return {
+    status: 200,
+    body: {
+      catalogue: messagingCatalogue(),
+      channels: { email: maskChannelSettings('email'), sms: maskChannelSettings('sms') },
+      outbound: db.prepare('SELECT * FROM outbound_messages ORDER BY id DESC LIMIT 50').all()
+        .map((m) => ({ id: S(m.id), channel: m.channel, kind: m.kind, to: m.to_addr, subject: m.subject, status: m.status, provider: m.provider, error: m.error, t: m.created_at })),
+    },
+  };
+});
+add('POST', '/api/messaging/:kind', true, (req) => {
+  if (!hasPerm(req, 'settings')) return { status: 403, body: { error: 'forbidden' } };
+  const kind = req.params.kind;
+  if (kind !== 'email' && kind !== 'sms') return { status: 400, body: { error: 'unknown_channel' } };
+  const b = req.body || {};
+  const saved = saveChannelSettings(kind, { enabled: bool(b.enabled), provider: b.provider ? String(b.provider) : null, config: b.config || {} });
+  audit(req.user.id, 'حفظ إعدادات ' + (kind === 'email' ? 'البريد' : 'الرسائل'), 'Saved ' + kind + ' settings', kind);
+  return { status: 200, body: { ok: true, channel: maskChannelSettings(kind), configured: saved.provider != null } };
+});
+add('POST', '/api/messaging/:kind/test', true, async (req) => {
+  if (!hasPerm(req, 'settings')) return { status: 403, body: { error: 'forbidden' } };
+  const kind = req.params.kind;
+  if (kind !== 'email' && kind !== 'sms') return { status: 400, body: { error: 'unknown_channel' } };
+  const r = await testChannel(kind);
+  audit(req.user.id, 'اختبار مزوّد ' + (kind === 'email' ? 'البريد' : 'الرسائل'), 'Tested ' + kind + ' provider', kind);
+  return { status: r.ok ? 200 : 502, body: r };
+});
+
 
 // ================= REFUNDS (admin) =================
 add('POST', '/api/refunds/:id', true, async (req) => {
@@ -1338,6 +1387,83 @@ function nextRequestNo() { const r = db.prepare("SELECT no FROM service_requests
 function requestRow(id) { return db.prepare('SELECT * FROM service_requests WHERE id=?').get(id); }
 function canSeeRequest(u, r) { return u.role === 'admin' || r.user_id === u.id || r.provider_id === u.id; }
 function addRequestEvent(reqId, fromUser, kind, note) { db.prepare('INSERT INTO request_events(request_id,from_user,kind,note,created_at) VALUES (?,?,?,?,?)').run(reqId, fromUser, kind, note || '', nowIso()); }
+
+// ================= AUTH: password reset (self-service) =================
+//
+// Security model:
+//   • The raw token is a 32-byte CSPRNG value; only its SHA-256 hash is stored, so a database
+//     read cannot be turned into a working reset link.
+//   • Tokens are single-use, expire in 30 minutes, and every new request invalidates the
+//     caller's previous outstanding tokens.
+//   • The request endpoint always returns the same generic message, so it cannot be used to
+//     discover which emails are registered.
+//   • The token is never logged and never placed in the response body; it is only delivered
+//     through the configured email channel (recorded as `disabled`/`logged` until one exists).
+const RESET_TTL_MIN = 30;
+const sha256hex = (v) => crypto.createHash('sha256').update(String(v)).digest('hex');
+const GENERIC_RESET_MSG = { ar: 'إذا كان الحساب موجوداً، فسيتم إرسال تعليمات إعادة التعيين.', en: 'If the account exists, reset instructions will be sent.' };
+
+function publicBase(req) {
+  const env = String(process.env.EJARI_PUBLIC_URL || '').replace(/\/+$/, '');
+  if (env) return env;
+  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
+  const proto = req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http');
+  return `${proto}://${host}`;
+}
+function issueResetToken(userId) {
+  db.prepare('UPDATE password_resets SET used=1 WHERE user_id=? AND used=0').run(userId);
+  const token = crypto.randomBytes(32).toString('hex');
+  const expires = new Date(Date.now() + RESET_TTL_MIN * 60000).toISOString();
+  db.prepare('INSERT INTO password_resets(user_id,token_hash,expires_at,used,created_at) VALUES (?,?,?,0,?)').run(userId, sha256hex(token), expires, nowIso());
+  return token;
+}
+function findReset(token) {
+  if (!token || typeof token !== 'string' || token.length < 20) return null;
+  return db.prepare('SELECT * FROM password_resets WHERE token_hash=?').get(sha256hex(token)) || null;
+}
+
+add('POST', '/api/auth/forgot-password', false, async (req) => {
+  if (!rateLimit(req, 'forgot', 5, 15 * 60 * 1000)) return { status: 429, body: { error: 'too_many_requests', message: GENERIC_RESET_MSG } };
+  const email = String((req.body || {}).email || '').toLowerCase().trim();
+  const generic = { status: 200, body: { ok: true, message: GENERIC_RESET_MSG } };
+  if (!/.+@.+\..+/.test(email)) return generic; // identical response — never reveal validity
+  const u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
+  if (!u || u.status === 'suspended') return generic;
+
+  const token = issueResetToken(u.id);
+  const link = `${publicBase(req)}/reset.html?token=${encodeURIComponent(token)}`;
+  const body = `إعادة تعيين كلمة المرور — إيجاري\nEjari password reset\n\nافتح الرابط التالي خلال ${RESET_TTL_MIN} دقيقة:\nOpen this link within ${RESET_TTL_MIN} minutes:\n${link}\n\nإن لم تطلب ذلك، تجاهل هذه الرسالة. / If you did not request this, ignore this message.`;
+  try { await dispatch('email', { kind: 'password_reset', to: u.email, subject: 'إعادة تعيين كلمة المرور — إيجاري / Ejari password reset', body }); } catch { /* recorded inside dispatch */ }
+  audit(u.id, 'طلب إعادة تعيين كلمة المرور', 'Requested a password reset', 'user:' + u.id);
+  return generic;
+});
+
+add('GET', '/api/auth/reset-password/:token', false, (req) => {
+  const r = findReset(req.params.token);
+  if (!r || r.used) return { status: 404, body: { valid: false, reason: 'invalid' } };
+  if (new Date(r.expires_at) < new Date()) return { status: 410, body: { valid: false, reason: 'expired' } };
+  return { status: 200, body: { valid: true } };
+});
+
+add('POST', '/api/auth/reset-password', false, (req) => {
+  if (!rateLimit(req, 'reset', 10, 15 * 60 * 1000)) return { status: 429, body: { error: 'too_many_requests' } };
+  const b = req.body || {};
+  const token = String(b.token || '');
+  const password = String(b.password || '');
+  if (password.length < 8) return { status: 400, body: { error: 'weak_password' } };
+  const r = findReset(token);
+  if (!r || r.used) return { status: 400, body: { error: 'invalid_token' } };
+  if (new Date(r.expires_at) < new Date()) return { status: 410, body: { error: 'expired_token' } };
+  const u = userRow(r.user_id);
+  if (!u) return { status: 400, body: { error: 'invalid_token' } };
+  db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password), u.id);
+  db.prepare('UPDATE password_resets SET used=1 WHERE id=?').run(r.id);
+  // A reset means "sign out everywhere": every existing session for the account is dropped.
+  db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
+  audit(u.id, 'إعادة تعيين كلمة المرور', 'Reset the password', 'user:' + u.id);
+  notify(u.id, 'sys', 'تم تعيين كلمة مرور جديدة', 'A new password was set', '', '');
+  return { status: 200, body: { ok: true } };
+});
 
 // ================= AUTH: password change =================
 add('POST', '/api/auth/password', true, (req) => {

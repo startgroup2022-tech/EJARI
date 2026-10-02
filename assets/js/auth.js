@@ -16,12 +16,22 @@ A.logintab=d=>{S.authTab=d.v;rerenderModal()};
 MOD.login=d=>{
   const demo=demoOn();
   const tab=demo?(S.authTab||'demo'):'pw';
-  const pwForm=`<div class="col">${field(T('البريد الإلكتروني','Email'),inp('lgMail','','email','dir="ltr" style="text-align:start" data-focus autocomplete="username"'))}${field(T('كلمة المرور','Password'),inp('lgPw','','password','dir="ltr" style="text-align:start" autocomplete="current-password"'))}</div>${demo?`<div class="hint" style="margin-top:8px">${T('جرّب أحد الحسابات التجريبية أعلاه، بريده وكلمة المرور','Try one of the demo accounts above, with its email and password')} <b dir="ltr">Demo@1234</b></div>`:''}<button class="btn brand" style="width:100%;margin-top:14px" data-a="pwlogin">${ic('lock',16)}${T('دخول','Sign in')}</button>`;
+  const pwForm=`<div class="col">${field(T('البريد الإلكتروني','Email'),inp('lgMail','','email','dir="ltr" style="text-align:start" data-focus autocomplete="username"'))}${field(T('كلمة المرور','Password'),inp('lgPw','','password','dir="ltr" style="text-align:start" autocomplete="current-password"'))}</div>${demo?`<div class="hint" style="margin-top:8px">${T('جرّب أحد الحسابات التجريبية أعلاه، بريده وكلمة المرور','Try one of the demo accounts above, with its email and password')} <b dir="ltr">Demo@1234</b></div>`:''}<div style="text-align:end;margin-top:6px"><a style="color:var(--brand);font-weight:600;cursor:pointer" data-a="modal" data-t="forgot">${T('نسيت كلمة المرور؟','Forgot password?')}</a></div><button class="btn brand" style="width:100%;margin-top:12px" data-a="pwlogin">${ic('lock',16)}${T('دخول','Sign in')}</button>`;
   return {title:T('تسجيل الدخول','Sign in'),cls:'narrow',body:`<div class="authlogo">${logoImg(80)}</div>${d.msg?`<div class="verres" style="background:var(--infosoft);color:var(--info);margin-bottom:14px">${ic('info',20)}<div class="sm" style="color:var(--ink)">${esc(d.msg)}</div></div>`:''}
    ${demo?`<div class="seg" style="width:100%;margin-bottom:16px">${seg([['demo',T('حساب تجريبي','Demo account')],['pw',T('بريد وكلمة مرور','Email & password')]],tab,'logintab')}</div>`:''}
    ${tab==='demo'?`<p class="mut sm" style="margin-bottom:14px">${T('حسابات تجريبية حقيقية ومحفوظة في قاعدة البيانات — اختر دوراً للدخول فوراً:','Real, database-backed demo accounts — pick a role to sign in instantly:')}</p><div class="rolepick">${Object.keys(ROLES).map(k=>`<button data-a="login" data-r="${k}"><span class="ii" style="color:${ROLES[k].c}">${ic(ROLES[k].icon,22)}</span><span style="flex:1"><b>${T(ROLES[k].ar,ROLES[k].en)}</b><small class="mut" style="display:block">${T(...DESC[k])}</small></span>${ic(S.lang==='ar'?'left':'right',16)}</button>`).join('')}</div>`
    :pwForm}
    <div class="hr"></div><div class="tc sm mut">${T('ليس لديك حساب؟','No account yet?')} <a style="color:var(--brand);font-weight:600;cursor:pointer" data-a="modal" data-t="register">${T('أنشئ حساباً','Create one')}</a></div>`};
+};
+
+/* Self-service password reset. The server always answers the same generic message, so the
+   UI shows one confirmation regardless of whether the address is registered. */
+MOD.forgot=()=>({title:T('استعادة كلمة المرور','Reset your password'),cls:'narrow',body:`<p class="mut sm">${T('أدخل بريدك الإلكتروني وسنرسل لك رابطاً لإعادة التعيين إن كان الحساب موجوداً.','Enter your email and we will send a reset link if the account exists.')}</p>${field(T('البريد الإلكتروني','Email'),inp('fpMail','','email','dir="ltr" style="text-align:start" data-focus autocomplete="username"'))}`,foot:`<button class="btn" data-a="close">${T('إلغاء','Cancel')}</button><button class="btn brand" data-a="forgotsend">${T('إرسال الرابط','Send link')}</button>`});
+A.forgotsend=async()=>{
+  const email=val('fpMail').trim();
+  if(!/.+@.+\..+/.test(email)){toast(T('أدخل بريداً إلكترونياً صحيحاً','Enter a valid email'),true);return}
+  try{const r=await API.post('/api/auth/forgot-password',{email});const m=(r&&r.message)?T(r.message.ar,r.message.en):T('إذا كان الحساب موجوداً، فسيتم إرسال تعليمات إعادة التعيين.','If the account exists, reset instructions will be sent.');openModal('login',{msg:m})}
+  catch(e){if(e&&e.status===429)toast(T('محاولات كثيرة — حاول لاحقاً','Too many attempts — try again later'),true);else apiError(e,'تعذّر الإرسال','Could not send the request')}
 };
 
 A.pwlogin=async()=>{

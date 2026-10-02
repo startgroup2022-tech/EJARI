@@ -81,7 +81,7 @@ const seg=(opts,cur,act,extra)=>`<div class="seg" role="tablist">${opts.map(o=>`
 const tabs=(opts,cur,key)=>`<div class="tabs">${opts.map(o=>`<button class="${o[0]===cur?'on':''}" data-a="tab" data-k="${key}" data-v="${o[0]}">${o[1]}</button>`).join('')}</div>`;
 const searchBox=(id,val,ph,inKey)=>`<div class="sr">${ic('search',16)}<input class="in" id="${id}" type="search" value="${esc(val)}" placeholder="${esc(ph)}" data-in="${inKey}" autocomplete="off"></div>`;
 const field=(label,inner,cls,hint)=>`<div class="fld ${cls||''}"><label class="lb">${label}</label>${inner}${hint?`<div class="hint">${hint}</div>`:''}</div>`;
-const sel=(id,opts,val)=>`<select class="sel" id="${id}">${opts.map(o=>`<option value="${esc(o[0])}" ${String(o[0])===String(val)?'selected':''}>${esc(o[1])}</option>`).join('')}</select>`;
+const sel=(id,opts,val,extra)=>`<select class="sel" id="${id}" ${extra||''}>${opts.map(o=>`<option value="${esc(o[0])}" ${String(o[0])===String(val)?'selected':''}>${esc(o[1])}</option>`).join('')}</select>`;
 const inp=(id,val,type,extra)=>`<input class="in" id="${id}" type="${type||'text'}" value="${esc(val==null?'':val)}" ${extra||''}>`;
 function table(cols,rows,emptyHtml){
   if(!rows.length) return `<div class="card">${emptyHtml||empty(T('لا توجد نتائج','No results'),T('جرّب تغيير الفلاتر أو البحث','Try changing the filters or search'),'search')}</div>`;

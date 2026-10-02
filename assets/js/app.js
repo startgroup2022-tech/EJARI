@@ -17,7 +17,7 @@ const NAV={
  admin:[
   [null,[['overview','grid','لوحة المؤشرات','Dashboard'],['users','users','المستخدمون','Users'],['verification','shield','طلبات التوثيق','Verification'],['contracts','file','العقود','Contracts'],['properties','building','العقارات','Properties'],['payments','card','المدفوعات والرسوم','Payments & fees'],['tickets','msg','الدعم والنزاعات','Support & disputes']]],
   [['الخدمات','Services'],[['services','tag','الخدمات','Services'],['requests','list','طلبات الخدمة','Service requests'],['appointments','calendar','المواعيد','Appointments']]],
-  [['النظام','System'],[['integrations','plug','التكامل مع الجهات','Integrations'],['content','layers','المحتوى والقوالب','Content & templates'],['roles','lock','الأدوار والصلاحيات','Roles & permissions'],['reports','chart','التقارير','Reports'],['notifications-admin','bell','الإشعارات','Notifications'],['audit','list','سجل التدقيق','Audit log'],['settings','sliders','الإعدادات','Settings']]]]
+  [['النظام','System'],[['integrations','plug','التكامل مع الجهات','Integrations'],['gateways','card','بوابات الدفع','Payment gateways'],['content','layers','المحتوى والقوالب','Content & templates'],['roles','lock','الأدوار والصلاحيات','Roles & permissions'],['reports','chart','التقارير','Reports'],['notifications-admin','bell','الإشعارات','Notifications'],['audit','list','سجل التدقيق','Audit log'],['settings','sliders','الإعدادات','Settings']]]]
 };
 const TITLE={notifications:['الإشعارات','Notifications'],profile:['حسابي','My account']};
 const viewTitle=()=>{const all=NAV[S.role].flatMap(g=>g[1]);const it=all.find(i=>i[0]===S.view);return it?T(it[2],it[3]):TITLE[S.view]?T(...TITLE[S.view]):''};
@@ -321,7 +321,21 @@ V['notifications-admin']=()=>{
 MOD.broadcast=()=>({title:T('إرسال إشعار','Send a notification'),body:`<div class="fg">${field(T('الجمهور','Audience'),sel('bcAud',[['all',T('كل المستخدمين','All users')],['landlords',T('المؤجرون','Landlords')],['tenants',T('المستأجرون','Tenants')],['staff',T('الموظفون','Staff')]],'all'))}${field(T('العنوان (عربي)','Title (Arabic)'),inp('bcTA','','text','data-focus'))}${field(T('العنوان (English)','Title (English)'),inp('bcTE','','text','dir="ltr"'))}${field(T('النص (عربي)','Body (Arabic)'),`<textarea class="ta" id="bcBA"></textarea>`,'full')}${field(T('النص (English)','Body (English)'),`<textarea class="ta" id="bcBE" dir="ltr"></textarea>`,'full')}</div>`,foot:`<button class="btn" data-a="close">${T('إلغاء','Cancel')}</button><button class="btn pri" data-a="bcsave">${ic('send',16)}${T('إرسال','Send')}</button>`});
 A.bcsave=async()=>{const t=val('bcTA').trim();if(!t){toast(T('أدخل العنوان','Enter a title'),true);return}try{const r=await API.post('/api/notifications/broadcast',{audience:val('bcAud'),titleAr:t,titleEn:val('bcTE').trim()||t,bodyAr:val('bcBA'),bodyEn:val('bcBE'),label:val('bcAud')});await refresh();closeModal();renderView();toast(T('تم الإرسال إلى '+r.recipients+' مستخدماً','Sent to '+r.recipients+' users'))}catch(e){apiError(e,'تعذّر الإرسال','Could not send')}};
 
-/* ===== PWA install guide ===== */
+/* ===== export modal (real CSV / JSON downloads from authenticated endpoints) ===== */
+const EXPORTS = {
+  contracts: ['العقود', 'Contracts'], payments: ['المدفوعات', 'Payments'], users: ['المستخدمون', 'Users'],
+  audit: ['سجل التدقيق', 'Audit log'], income: ['الدخل الشهري', 'Monthly income'], requests: ['طلبات الخدمة', 'Service requests'],
+};
+MOD.export = d => {
+  const k = d.kind || 'payments';
+  return {
+    title: T('تصدير البيانات', 'Export data'), cls: 'narrow',
+    body: `<div class="col">${field(T('نوع البيانات', 'Data set'), sel('exKind', Object.keys(EXPORTS).map(x => [x, T(...EXPORTS[x])]), k))}
+    <div class="hint">${T('يُصدَّر ملف CSV بترميز UTF-8 يفتح مباشرة في Excel، ويحتوي على البيانات الفعلية من قاعدة البيانات فقط.','A UTF-8 CSV opens directly in Excel and contains only real data from the database.')}</div></div>`,
+    foot: `<button class="btn" data-a="close">${T('إلغاء', 'Cancel')}</button><button class="btn pri" data-a="exportgo">${ic('download', 16)}${T('تنزيل', 'Download')}</button>`,
+  };
+};
+A.exportgo = d => { const kind = d.kind || val('exKind') || 'payments'; closeModal(); download('/api/export/' + kind); toast(T('جارٍ تنزيل الملف…', 'Downloading…')); };
 MOD.install=()=>({title:T('تثبيت التطبيق على جوالك','Install the app on your phone'),body:`<div class="prose"><p>${T('إيجاري تطبيق ويب مثبَّت (PWA): يفتح بملء الشاشة ويعمل دون متجر تطبيقات.','Ejari is an installable web app (PWA): it opens full-screen and needs no app store.')}</p><ol><li>${T('افتح app.html من متصفح جوالك.','Open app.html in your phone browser.')}</li><li>${T('من قائمة المتصفح اختر «إضافة إلى الشاشة الرئيسية».','From the browser menu choose “Add to Home screen”.')}</li><li>${T('سيظهر أيقونة إيجاري على شاشتك مثل أي تطبيق آخر.','Ejari appears on your home screen like any other app.')}</li></ol><p class="mut sm">${T('على iPhone استخدم Safari، وعلى Android استخدم Chrome لأفضل تجربة.','On iPhone use Safari, and on Android use Chrome, for the best experience.')}</p></div>`,foot:`<button class="btn" data-a="close">${T('إغلاق','Close')}</button><button class="btn pri" data-a="openapp">${T('افتح التطبيق','Open the app')}</button>`});
 
 /* ===== legal documents (privacy & terms) ===== */

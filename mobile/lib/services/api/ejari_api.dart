@@ -107,7 +107,48 @@ class EjariApi {
 
   // ---------------- Payments ----------------
 
-  /// `POST /api/payments/:id/pay` — records the payment against the real backend.
+  /// `GET /api/gateways/available` — the enabled gateways a payer may choose from.
+  /// Returns an empty list on failure so the UI degrades to a clear message rather than crashing.
+  Future<List<Map<String, dynamic>>> availableGateways() async {
+    try {
+      final res = await _client.get<Map<String, dynamic>>('/api/gateways/available');
+      return ((res['gateways'] as List?) ?? const []).cast<Map<String, dynamic>>();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// `POST /api/payments/:id/intent` — opens a real payment with the chosen gateway.
+  /// Returns the intent (reference, redirect URL, status). The payment is only
+  /// confirmed when the gateway's signed webhook reaches the server.
+  Future<Map<String, dynamic>> createPaymentIntent(String paymentId, {String? gatewayId, String method = 'benefit'}) async {
+    final res = await _client.post<Map<String, dynamic>>(
+      '/api/payments/$paymentId/intent',
+      body: {'gatewayId': gatewayId, 'method': method},
+    );
+    return (res['intent'] as Map).cast<String, dynamic>();
+  }
+
+  /// `GET /api/payments/intent/:reference` — poll an intent's current status.
+  Future<Map<String, dynamic>> paymentIntent(String reference) async {
+    final res = await _client.get<Map<String, dynamic>>('/api/payments/intent/$reference');
+    return (res['intent'] as Map).cast<String, dynamic>();
+  }
+
+  /// `POST /api/payments/intent/:reference/verify` — ask the server to re-check the
+  /// authoritative status with the provider (used after returning from a hosted page).
+  Future<Map<String, dynamic>> verifyPaymentIntent(String reference) async {
+    final res = await _client.post<Map<String, dynamic>>('/api/payments/intent/$reference/verify');
+    return (res['intent'] as Map).cast<String, dynamic>();
+  }
+
+  /// `POST /api/payments/intent/:reference/sandbox-confirm` — only valid for the
+  /// sandbox gateway; lets the test provider report its result through the same
+  /// signed-webhook path a real gateway uses. Refused (403) for live gateways.
+  Future<Map<String, dynamic>> sandboxConfirm(String reference, {String outcome = 'paid'}) =>
+      _client.post<Map<String, dynamic>>('/api/payments/intent/$reference/sandbox-confirm', body: {'outcome': outcome});
+
+  /// `POST /api/payments/:id/pay` — records a manual (cash) payment against the real backend.
   Future<void> pay(String paymentId, String method) =>
       _client.post<Map<String, dynamic>>('/api/payments/$paymentId/pay', body: {'method': method});
 

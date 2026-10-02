@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/errors/api_exception.dart';
 import '../../core/localization/app_strings.dart';
@@ -17,9 +18,10 @@ import '../../widgets/status_chip.dart';
 
 /// Payment history and the tenant's real pay action.
 ///
-/// Paying calls `POST /api/payments/:id/pay`, which is the only payment mechanism
-/// the backend implements — there is no card gateway, so the UI records the
-/// selected method rather than pretending a gateway exists.
+/// Paying opens a real payment intent (`POST /api/payments/:id/intent`) against
+/// whichever gateways the administrator has enabled (`GET /api/gateways/available`).
+/// The instalment is only marked paid when the gateway's signed webhook reaches
+/// the server — never on the client's say-so.
 class PaymentsScreen extends ConsumerStatefulWidget {
   const PaymentsScreen({super.key});
 
@@ -160,81 +162,64 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
 
   Future<void> _confirmPay(Payment payment) async {
     final s = AppStrings.of(context);
-    final method = await showModalBottomSheet<String>(
+    final api = ref.read(ejariApiProvider);
+
+    // Real gateways are whatever the admin has enabled — never a hardcoded provider.
+    final gateways = await api.availableGateways();
+    if (!mounted) return;
+    if (gateways.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s.noGatewayEnabled)));
+      return;
+    }
+    final gateway = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    s.method,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: ctx.palette.ink,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '${Fmt.money(payment.amount, s.currency)} · ${Fmt.date(payment.due, Localizations.localeOf(ctx).languageCode)}',
-                    style: TextStyle(fontSize: 13.5, color: ctx.palette.ink2),
-                  ),
-                ],
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.account_balance_wallet_outlined),
-              title: Text(s.methodBenefit),
-              onTap: () => Navigator.pop(ctx, 'benefit'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.credit_card_outlined),
-              title: Text(s.methodCard),
-              onTap: () => Navigator.pop(ctx, 'card'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.account_balance_outlined),
-              title: Text(s.methodTransfer),
-              onTap: () => Navigator.pop(ctx, 'transfer'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.payments_outlined),
-              title: Text(s.methodCash),
-              onTap: () => Navigator.pop(ctx, 'cash'),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
+      builder: (ctx) => _GatewaySheet(gateways: gateways, payment: payment, s: s),
     );
-    if (method == null) return;
-    if (!mounted) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(s.payConfirmTitle),
-        content: Text(s.payConfirmBody),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.cancel)),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.confirm)),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
+    if (gateway == null || !mounted) return;
 
     setState(() => _busyId = payment.id);
     try {
-      await ref.read(ejariApiProvider).pay(payment.id, method);
-      await ref.read(authProvider.notifier).refresh();
+      final intent = await api.createPaymentIntent(payment.id, gatewayId: gateway['id'] as String?, method: 'benefit');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s.paySuccess)));
+      setState(() => _busyId = null);
+
+      final reference = intent['reference'] as String;
+      final isSandbox = intent['provider'] == 'sandbox';
+      final redirectUrl = intent['redirectUrl'] as String?;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(isSandbox ? s.paySandboxTitle : s.payProviderTitle),
+          content: Text(isSandbox ? s.paySandboxBody : s.payProviderBody),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.cancel)),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.confirm)),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+
+      if (isSandbox) {
+        // The sandbox provider reports its result through the same signed-webhook
+        // path a real gateway uses.
+        await api.sandboxConfirm(reference, outcome: 'paid');
+        await ref.read(authProvider.notifier).refresh();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s.paySuccess)));
+      } else if (redirectUrl != null && redirectUrl.startsWith('http')) {
+        // A real hosted gateway (Tap): open its PCI-compliant page. The payment only
+        // settles server-side, via the signed webhook or the post-return verification.
+        await launchUrl(Uri.parse(redirectUrl), mode: LaunchMode.externalApplication);
+        if (!mounted) return;
+        // Re-verify against the provider, then refresh the ledger.
+        await api.verifyPaymentIntent(reference);
+        await ref.read(authProvider.notifier).refresh();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s.payProviderOpened)));
+      } else {
+        await ref.read(authProvider.notifier).refresh();
+      }
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -242,6 +227,52 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
     } finally {
       if (mounted) setState(() => _busyId = null);
     }
+  }
+}
+
+class _GatewaySheet extends StatelessWidget {
+  const _GatewaySheet({required this.gateways, required this.payment, required this.s});
+
+  final List<Map<String, dynamic>> gateways;
+  final Payment payment;
+  final AppStrings s;
+
+  String _label(Map<String, dynamic> g) {
+    final l = g['label'];
+    if (l is Map) return (l['ar'] ?? l['en'] ?? '').toString();
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(s.chooseGateway, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: context.palette.ink)),
+                const SizedBox(height: 6),
+                Text(
+                  '${Fmt.money(payment.amount, s.currency)} · ${Fmt.date(payment.due, Localizations.localeOf(context).languageCode)}',
+                  style: TextStyle(fontSize: 13.5, color: context.palette.ink2),
+                ),
+              ],
+            ),
+          ),
+          ...gateways.map((g) => ListTile(
+                leading: const Icon(Icons.credit_card_outlined),
+                title: Text(_label(g)),
+                subtitle: (g['testMode'] == true) ? Text(s.testMode) : null,
+                onTap: () => Navigator.pop(context, g),
+              )),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
   }
 }
 

@@ -166,6 +166,14 @@ abstract class AppStrings {
   String get payConfirmTitle;
   String get payConfirmBody;
   String get paySuccess;
+  String get chooseGateway;
+  String get noGatewayEnabled;
+  String get testMode;
+  String get paySandboxTitle;
+  String get paySandboxBody;
+  String get payProviderTitle;
+  String get payProviderBody;
+  String get payProviderOpened;
   String get feePayment;
 
   // ---- Maintenance ----
@@ -546,6 +554,22 @@ class AppStringsAr extends AppStrings {
   String get payConfirmBody => 'سيتم تسجيل هذه الدفعة كمدفوعة في المنصة.';
   @override
   String get paySuccess => 'تم تسجيل الدفعة بنجاح';
+  @override
+  String get chooseGateway => 'اختر بوابة الدفع';
+  @override
+  String get noGatewayEnabled => 'لا توجد بوابة دفع مفعّلة. تواصل مع الإدارة.';
+  @override
+  String get testMode => 'وضع الاختبار';
+  @override
+  String get paySandboxTitle => 'تأكيد الدفع';
+  @override
+  String get paySandboxBody => 'هذه بوابة اختبار. لا تُدخل بيانات بطاقة حقيقية. سيتم تأكيد الدفع عبر الخادم.';
+  @override
+  String get payProviderTitle => 'إتمام الدفع';
+  @override
+  String get payProviderBody => 'سيتم تحويلك إلى صفحة المزوّد لإتمام الدفع. يُحدَّث السداد تلقائياً عند تأكيد البوابة.';
+  @override
+  String get payProviderOpened => 'أكمل الدفع في صفحة البوابة، ثم عد للتحقق من الحالة.';
   @override
   String get feePayment => 'رسوم';
 
@@ -1004,6 +1028,22 @@ class AppStringsEn extends AppStrings {
   String get payConfirmBody => 'This payment will be recorded as paid on the platform.';
   @override
   String get paySuccess => 'Payment recorded successfully';
+  @override
+  String get chooseGateway => 'Choose a payment gateway';
+  @override
+  String get noGatewayEnabled => 'No payment gateway is enabled. Please contact the administrator.';
+  @override
+  String get testMode => 'Test mode';
+  @override
+  String get paySandboxTitle => 'Confirm payment';
+  @override
+  String get paySandboxBody => 'This is a test gateway. Do not enter real card details. The payment is confirmed server-side.';
+  @override
+  String get payProviderTitle => 'Complete payment';
+  @override
+  String get payProviderBody => 'You will be sent to the provider page to complete payment. It updates automatically once the gateway confirms.';
+  @override
+  String get payProviderOpened => 'Complete the payment on the provider page, then return to check the status.';
   @override
   String get feePayment => 'Fee';
 

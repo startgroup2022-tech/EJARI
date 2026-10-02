@@ -2,10 +2,12 @@
 // No native compilation, no external dependency — the data survives restarts
 // in data/ejari.db. Delete that file to reset to the seed dataset.
 import { DatabaseSync } from 'node:sqlite';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hashPassword } from './auth.mjs';
+import { encryptJson } from './gateways.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = path.join(root, 'data');
@@ -179,6 +181,43 @@ CREATE TABLE IF NOT EXISTS notification_log(
   body_ar TEXT, body_en TEXT, recipients INTEGER NOT NULL DEFAULT 0,
   sent_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS payment_gateways(
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,            -- sandbox | benefitpay | card | banktransfer | …
+  label_ar TEXT NOT NULL, label_en TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  test_mode INTEGER NOT NULL DEFAULT 1,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'BHD',
+  config_enc TEXT,                   -- AES-256-GCM encrypted JSON of provider credentials
+  webhook_secret_enc TEXT,           -- encrypted signing secret for inbound webhooks
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS payment_intents(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  reference TEXT UNIQUE NOT NULL,    -- our idempotency key, sent to the provider
+  payment_id INTEGER REFERENCES payments(id),
+  contract_id INTEGER REFERENCES contracts(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  gateway_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  amount REAL NOT NULL, currency TEXT NOT NULL DEFAULT 'BHD',
+  status TEXT NOT NULL DEFAULT 'pending',   -- pending|processing|paid|failed|cancelled|refunded
+  method TEXT,
+  provider_ref TEXT,                 -- opaque provider transaction id
+  redirect_url TEXT,                 -- provider-hosted page the client is sent to
+  failure_reason TEXT,
+  test_mode INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS webhook_events(
+  event_id TEXT PRIMARY KEY,         -- provider-supplied unique id (replay protection)
+  gateway_id TEXT,
+  intent_reference TEXT,
+  status TEXT,
+  signature_ok INTEGER NOT NULL DEFAULT 0,
+  received_at TEXT NOT NULL
+);
 `);
 
 const now = () => new Date().toISOString();
@@ -204,7 +243,16 @@ function bootstrapSystem() {
     for (const role of Object.keys(grant)) for (const p of PERMS) insRP.run(role, p, grant[role].includes(p) ? 1 : 0);
   }
   const insSet = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
-  for (const [k, v] of [['fee_registration', '10'], ['fee_renewal', '5'], ['remind_days', '3'], ['late_repeat_days', '5'], ['two_factor_required', '1'], ['session_timeout_min', '30'], ['retention_months', '60'], ['maintenance_mode', '0']]) insSet.run(k, v);
+  for (const [k, v] of [
+    ['fee_registration', '10'], ['fee_renewal', '5'], ['remind_days', '3'], ['late_repeat_days', '5'],
+    ['two_factor_required', '1'], ['session_timeout_min', '30'], ['retention_months', '60'], ['maintenance_mode', '0'],
+    // Company / locale / notification / email defaults — all editable from the admin console.
+    ['company_name_ar', 'إيجاري'], ['company_name_en', 'Ejari'],
+    ['currency', 'BHD'], ['timezone', 'Asia/Bahrain'], ['locale_default', 'ar'],
+    ['support_email', 'info@ejari.bh'], ['support_phone', '+973 1753 7070'],
+    ['notify_rent_due', '1'], ['notify_payment', '1'], ['notify_expiry', '1'], ['notify_renewal', '1'], ['notify_maintenance', '1'],
+    ['email_enabled', '0'], ['smtp_host', ''], ['smtp_port', '587'], ['smtp_user', ''], ['smtp_from', 'no-reply@ejari.bh'],
+  ]) insSet.run(k, v);
 
   if (count('users') === 0) {
     const email = String(process.env.EJARI_ADMIN_EMAIL || '').toLowerCase().trim();
@@ -251,7 +299,13 @@ if (count('users') === 0) {
 }
 
 // Additive column migrations — no destructive change to existing data.
-for (const [table, col, type] of [['audit_log', 'before_value', 'TEXT'], ['audit_log', 'after_value', 'TEXT']]) {
+for (const [table, col, type] of [
+  ['audit_log', 'before_value', 'TEXT'], ['audit_log', 'after_value', 'TEXT'],
+  ['payments', 'gateway_id', 'TEXT'], ['payments', 'intent_id', 'INTEGER'], ['payments', 'txn_ref', 'TEXT'],
+  ['refunds', 'payment_id', 'INTEGER'], ['refunds', 'gateway_id', 'TEXT'], ['refunds', 'provider', 'TEXT'],
+  ['refunds', 'provider_ref', 'TEXT'], ['refunds', 'created_at', 'TEXT'],
+  ['payment_intents', 'verified', 'INTEGER'], ['payment_intents', 'failure_reason', 'TEXT'],
+]) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
 }
@@ -422,12 +476,22 @@ function seed() {
   const insRP = db.prepare(`INSERT INTO role_permissions(role_id,perm,allowed) VALUES (?,?,?)`);
   for (const role of Object.keys(grant)) for (const p of PERMS) insRP.run(role, p, grant[role].includes(p) ? 1 : 0);
 
-  const insSet = db.prepare(`INSERT INTO settings(key,value) VALUES (?,?)`);
-  insSet.run('fee_registration', '10'); insSet.run('fee_renewal', '5'); insSet.run('remind_days', '3'); insSet.run('late_repeat_days', '5');
-  insSet.run('two_factor_required', '1'); insSet.run('session_timeout_min', '30'); insSet.run('retention_months', '60'); insSet.run('maintenance_mode', '0');
+  const insSet = db.prepare(`INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)`);
+  for (const [k, v] of [
+    ['fee_registration', '10'], ['fee_renewal', '5'], ['remind_days', '3'], ['late_repeat_days', '5'],
+    ['two_factor_required', '1'], ['session_timeout_min', '30'], ['retention_months', '60'], ['maintenance_mode', '0'],
+    ['company_name_ar', 'إيجاري'], ['company_name_en', 'Ejari'],
+    ['currency', 'BHD'], ['timezone', 'Asia/Bahrain'], ['locale_default', 'ar'],
+    ['support_email', 'info@ejari.bh'], ['support_phone', '+973 1753 7070'],
+    ['notify_rent_due', '1'], ['notify_payment', '1'], ['notify_expiry', '1'], ['notify_renewal', '1'], ['notify_maintenance', '1'],
+    ['email_enabled', '0'], ['smtp_host', ''], ['smtp_port', '587'], ['smtp_user', ''], ['smtp_from', 'no-reply@ejari.bh'],
+  ]) insSet.run(k, v);
 
   // ---- service catalogue, categories, content, and sample requests ----
   seedCatalog(uid);
+
+  // ---- a working default payment gateway (sandbox) so the payment flow is real out of the box ----
+  seedGateways();
 
   console.log(`Seed complete: ${count('users')} users, ${count('properties')} properties, ${count('contracts')} contracts, ${count('payments')} payments.`);
 }
@@ -475,6 +539,17 @@ function seedCatalog(uid) {
     REQ('SR-2026-00003', 'Lease drafting', 'landlord', null, 'new', 15, 'صياغة عقد إيجار جديد لوحدة 15', null, null, d(2026, 9, 22));
     REQ('SR-2026-00004', 'Lease dispute mediation', 'tenant', 'admin2', 'in_progress', 30, 'وساطة في نزاع استرداد التأمين', null, null, d(2026, 9, 19));
   }
+}
+
+// Seeds a single, enabled sandbox gateway so that payments can be exercised end-to-end
+// immediately. In production this is replaced by whatever the administrator configures.
+export function seedGateways() {
+  if (count('payment_gateways') > 0) return;
+  const id = 'gw_sandbox';
+  const cfg = { merchantId: 'SANDBOX-MERCHANT', secretKey: 'sandbox-secret-key' };
+  const hook = crypto.randomBytes(24).toString('hex');
+  db.prepare(`INSERT INTO payment_gateways(id,provider,label_ar,label_en,enabled,test_mode,is_default,currency,config_enc,webhook_secret_enc,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(id, 'sandbox', 'بوابة اختبار', 'Sandbox gateway', 1, 1, 1, 'BHD', encryptJson(cfg), encryptJson({ secret: hook }), now(), now());
 }
 
 export const nowIso = now;

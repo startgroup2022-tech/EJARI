@@ -10,7 +10,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=u
 // Only these files/directories are ever served over HTTP. Everything else on disk
 // (the SQLite database, server source, .git, tests, deploy configs) stays private.
 const PUBLIC_DIR = path.join(root, 'assets');
-const PUBLIC_FILES = new Set(['index.html', 'website.html', 'dashboard.html', 'app.html', 'app-screen.html', 'manifest.webmanifest', 'favicon.ico', 'robots.txt', 'sitemap.xml']);
+const PUBLIC_FILES = new Set(['index.html', 'website.html', 'dashboard.html', 'app.html', 'app-screen.html', 'pay.html', 'manifest.webmanifest', 'sw.js', 'favicon.ico', 'robots.txt', 'sitemap.xml']);
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -41,7 +41,7 @@ function readBody(req) {
       if (settled) return;
       if (!chunks.length) return resolve(null);
       const raw = Buffer.concat(chunks).toString('utf8');
-      try { resolve(raw ? JSON.parse(raw) : null); } catch { resolve(null); }
+      try { resolve({ parsed: raw ? JSON.parse(raw) : null, raw }); } catch { resolve({ parsed: null, raw }); }
     });
     req.on('error', reject);
   });
@@ -74,8 +74,9 @@ export function createServer() {
     if (!pathname.startsWith('/api/')) return serveStatic(req, res, pathname);
 
     let body = null;
+    let rawBody = null;
     if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
-      try { body = await readBody(req); }
+      try { const r = await readBody(req); body = r && r.parsed; rawBody = r && r.raw; }
       catch {
         // Respond with a real 413 and close cleanly rather than resetting the socket.
         res.writeHead(413, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8', Connection: 'close' })
@@ -84,6 +85,7 @@ export function createServer() {
       }
     }
     req.body = body;
+    req.rawBody = rawBody;
     req.query = Object.fromEntries(url.searchParams);
 
     const route = findRoute(req.method, pathname);
@@ -96,7 +98,7 @@ export function createServer() {
     req.params = route.params;
 
     let result;
-    try { result = route.handler(req); } catch (e) {
+    try { result = await route.handler(req); } catch (e) {
       console.error(e);
       res.writeHead(500, { ...SECURITY_HEADERS, 'Content-Type': 'application/json' }).end(JSON.stringify({ error: 'server_error' }));
       return;

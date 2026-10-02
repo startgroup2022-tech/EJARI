@@ -80,9 +80,13 @@ Rules that matter when editing it:
 ```bash
 npm test                 # 88 end-to-end checks (starts its own server on :4321)
 npm run test:security    # 204 security probes
-npm run test:production  # 27 production-mode checks (empty DB, real scenario, restart, IP allow-list)
+npm run test:render      # 154 render-integrity checks
+npm run test:production  # 31 production-mode checks (empty DB, real scenario, restart, IP allow-list, PWA assets)
 npm run test:ui          # 17 real-browser UI checks (demo vs production)
-npm run test:all         # the whole gate
+npm run test:gateway     # 70 payment-gateway checks (signed webhooks, refunds, real DB)
+npm run test:tap         # 44 Tap Payments checks against a local Tap API contract stand-in
+npm run test:xss         # 14 real-browser XSS checks
+npm run test:all         # the whole gate (all of the above in order)
 npm start                # serve on :4000
 node server.mjs 12000    # custom port
 rm -f data/ejari.db*     # reset to seed data (re-seeds on next start, dev only)
@@ -162,3 +166,36 @@ rm -f data/ejari.db*     # reset to seed data (re-seeds on next start, dev only)
   `String(x == null ? '' : x)` (or `N(...)` for numbers) before `.run()`.
 - **Exports honour the permission matrix:** `users` → `users.view`, `audit` → `audit`,
   `payments`/`income` → `payments.view` (admins only). Contract/tenant/landlord exports stay row-scoped.
+
+## Payment gateways
+- Tenant/landlord `GET /api/bootstrap` must carry the enabled gateways so the checkout
+  gateway picker works. It exposes **display fields only** — `id, provider, label, kind,
+  enabled, testMode, currency, isDefault` — never `configured`/credential material. The admin
+  projection (`mapGateway`) is not safe for non-admin roles.
+- `enabled: true` is required in that projection: the client's `activeGateways()` filters on it.
+- Gateway secrets are returned only as a mask (`••••••<last3>`). The edit form must never
+  prefill secret fields, and `POST /api/gateways/:id` ignores any value starting with `•` so a
+  round-tripped mask cannot overwrite the stored credential. Blank keeps the old value.
+- The tenant pay flow (`views-role.js` `MOD.pay`/`A.paynow`, `_confirmPay` in Flutter) is:
+  choose gateway → `POST /api/payments/:id/intent` → provider stage → signed webhook
+  (sandbox: `POST /api/payments/intent/:ref/sandbox-confirm`) → payment `paid` + receipt.
+- **Tap Payments is the real API-capable provider** (`server/gateways.mjs` `tapProvider`). Its
+  `apiBase` is configurable per gateway so the same adapter serves live and the test stand-in.
+  Lifecycle: `createCharge` (Tap `/v2/charges`) → hosted redirect → `GET /v2/charges/:id` poll
+  (return flow, `POST /api/payments/intent/:ref/verify`) **and/or** signed webhook
+  (`hashstring` = HMAC-SHA256 of the raw body, header `hashstring`/`x-tap-signature`).
+- **A payment only becomes `paid` on provider truth**, never on a client callback: the webhook
+  handler re-queries Tap (`verifyChargeWithProvider`) before calling `processWebhook`, and the
+  verify endpoint does the same. A well-signed event that cannot be confirmed returns **502
+  `verification_unavailable`** (retryable) — do not collapse that into a 401, which would make
+  Tap stop retrying a real event.
+- **Tap reuses the charge id across status changes**, so the webhook event id is
+  `id + ':' + status` to stay unique while still deduplicating a genuine replay.
+- **Refunds:** `settleRefund()` is shared by the direct admin refund and by approving a tenant
+  request. For API-capable gateways it calls the provider first and only writes the ledger on
+  success; on provider failure it returns 502 and the caller rolls the refund back to `pending`.
+  A tenant opens a request with `POST /api/refunds` (pending); admin approves with
+  `POST /api/refunds/:id {approve:true}`. Never allow a second refund on the same payment.
+- **PWA:** `sw.js` (network-first for navigations, cache-first for static assets) + `assets/js/pwa.js`
+  register the service worker; `/api/*` and `pay.html` are always network-only. `sw.js` must stay
+  in `PUBLIC_FILES` in `server/http.mjs`.

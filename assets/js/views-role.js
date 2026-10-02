@@ -195,32 +195,85 @@ A.remind=async d=>{const p=DB.payments.find(x=>x.id===d.id),c=ctOf(p.c);try{awai
 A.remindall=async()=>{try{const r=await API.post('/api/payments/remind-all');if(!r.count){toast(T('لا توجد متأخرات','No overdue payments'));return}toast(T(`تم إرسال ${r.count} تذكير`,`${r.count} reminders sent`))}catch(e){apiError(e,'تعذّر الإرسال','Could not send')}};
 A.markpaid=async d=>{try{await afterMutation(API.post('/api/payments/'+d.id+'/mark-cash'));closeModal();toast(T('تم تسجيل الدفعة','Payment recorded'))}catch(e){apiError(e,'تعذّر التسجيل','Could not record the payment')}};
 const METH={benefit:['بنفاذ / Benefit Pay','Benefit Pay'],card:['بطاقة ائتمان','Credit card'],bank:['تحويل بنكي','Bank transfer'],cash:['نقداً','Cash']};
+// Payment methods are offered per gateway kind. `hosted` gateways hand the payer off to the
+// provider's own page; `manual` gateways (bank transfer) are settled out of band.
+const GWMETH={hosted:['benefit','card','bank'],manual:['bank'],sandbox:['benefit','card','bank']};
+const gwOf=id=>DB.gateways.find(g=>g.id===id);
+const gwLabel=g=>L(g.label);
+const activeGateways=()=>DB.gateways.filter(g=>g.enabled);
 function payTenant(){
   const all=myPays().sort((a,b)=>a.due-b.due);const openP=all.filter(p=>p.status!=='paid'&&p.status!=='upcoming'||(p.kind==='fee'&&p.status!=='paid'));const nxt=all.filter(p=>p.status==='upcoming'&&p.kind==='rent').slice(0,2);const hist=all.filter(p=>p.status==='paid').sort((a,b)=>b.due-a.due);
   const y=hist.filter(p=>p.paidOn&&p.paidOn.getFullYear()===TODAY.getFullYear()).reduce((a,p)=>a+p.amount,0);
   return pageHead(T('المدفوعات','Payments'),T('ادفع إيجارك وحمّل إيصالاتك','Pay your rent and get your receipts'),btn(T('تصدير','Export'),'modal',{t:'export',kind:'payments'},'','download'))+
   `<div class="kpis">${kpi(T('المستحق الآن','Due now'),`${fmt(openP.reduce((a,p)=>a+p.amount,0))}<small>${cur()}</small>`,T(`${openP.length} دفعات`,`${openP.length} payments`),'coins')}${kpi(T('المدفوع في '+TODAY.getFullYear(),'Paid in '+TODAY.getFullYear()),`${fmt(y)}<small>${cur()}</small>`,'','check')}${kpi(T('السداد التلقائي','Auto-pay'),DB.autopay?T('مفعّل','On'):T('متوقف','Off'),`<label class="row" style="gap:8px">${sw(!!DB.autopay,'autopay')}<span>${T('تبديل','Toggle')}</span></label>`,'refresh')}</div>
+  ${activeGateways().length?'':`<div class="verres bad" style="margin-top:16px">${ic('alert',22)}<div><b>${T('لا توجد بوابة دفع مفعّلة','No payment gateway is enabled')}</b><div class="sm">${T('تواصل مع الإدارة لتفعيل بوابة الدفع.','Contact the administrator to enable a payment gateway.')}</div></div></div>`}
   <div class="card" style="margin-top:20px"><div class="ch"><h3>${T('دفعات مستحقة وقادمة','Due & upcoming')}</h3></div>${[...openP,...nxt].map(p=>`<div class="li"><span class="ii ${p.status==='overdue'?'bad':p.status==='due'?'info':''}">${ic(p.kind==='fee'?'file':'card',17)}</span><div class="tx"><div class="sm b">${p.kind==='fee'?T('رسوم تسجيل العقد','Contract registration fee')+' · '+ctOf(p.c).no:mon(p.due.getMonth(),1)+' '+p.due.getFullYear()+' — '+T('إيجار','Rent')}</div><div class="xs mut3">${fd(p.due)} · ${dayLbl(days(p.due,TODAY))}</div></div><b class="num">${money(p.amount)}</b>${PST(p.status)}${p.status!=='upcoming'?btn(T('ادفع','Pay'),'modal',{t:'pay',id:p.id},'sm brand'):''}</div>`).join('')||empty(T('لا مبالغ مستحقة','Nothing due'),'','check')}</div>
   <h3 style="margin:24px 0 12px">${T('سجل المدفوعات','Payment history')}</h3>
-  ${table([{h:T('الفترة','Period'),f:p=>p.kind==='fee'?T('رسوم تسجيل','Registration fee'):mon(p.due.getMonth(),1)+' '+p.due.getFullYear()},{h:T('تاريخ السداد','Paid on'),f:p=>fd(p.paidOn)},{h:T('الوسيلة','Method'),f:p=>T(...METH[p.method]||['—','—'])},{h:T('الإيصال','Receipt'),f:p=>`<span class="num" dir="ltr">${p.receipt}</span>`},{h:T('المبلغ','Amount'),f:p=>`<b class="num">${money(p.amount)}</b>`},{h:'',c:'ac',f:p=>ibtn('download','dlreceipt',{id:p.id},T('تنزيل الإيصال','Download receipt'))}],hist.slice(0,12))}`;
+  ${table([{h:T('الفترة','Period'),f:p=>p.kind==='fee'?T('رسوم تسجيل','Registration fee'):mon(p.due.getMonth(),1)+' '+p.due.getFullYear()},{h:T('تاريخ السداد','Paid on'),f:p=>fd(p.paidOn)},{h:T('الوسيلة','Method'),f:p=>p.gateway?(gwOf(p.gateway)?gwLabel(gwOf(p.gateway)):p.gateway):T(...(METH[p.method]||['—','—']))},{h:T('الإيصال','Receipt'),f:p=>`<span class="num" dir="ltr">${p.receipt}</span>`},{h:T('المبلغ','Amount'),f:p=>`<b class="num">${money(p.amount)}</b>`},{h:'',c:'ac',f:p=>p.status==='paid'?`${ibtn('download','dlreceipt',{id:p.id},T('تنزيل الإيصال','Download receipt'))}${ibtn('refresh','refundreq',{id:p.id},T('طلب استرجاع','Request refund'))}`:`<span class="chip mut">${T('مُسترجعة','Refunded')}</span>`}],hist.slice(0,12))}`;
 }
+MOD.refundreq=d=>({title:T('طلب استرجاع','Request a refund'),cls:'narrow',body:`<div class="col"><p class="mut sm">${T('سيُرسل طلبك إلى الإدارة للمراجعة. لا يُسترجَع المبلغ إلا بعد الاعتماد.','Your request is sent to the administration for review. The amount is only refunded once approved.')}</p>${field(T('السبب','Reason'),`<textarea class="ta" id="rfWhy" style="min-height:80px" placeholder="${T('اذكر سبب طلب الاسترجاع…','Describe why you are requesting a refund…')}"></textarea>`)}</div>`,foot:`<button class="btn" data-a="close">${T('إلغاء','Cancel')}</button><button class="btn pri" data-a="refundreqsave" data-id="${d.id}">${T('إرسال الطلب','Send request')}</button>`});
+A.refundreqsave=async d=>{
+  const why=($('#rfWhy')&&$('#rfWhy').value||'').trim();
+  try{await API.post('/api/refunds',{paymentId:Number(d.id),reasonAr:why||undefined,reasonEn:why||undefined});closeModal();toast(T('تم إرسال طلب الاسترجاع','Refund request sent'))}
+  catch(e){closeModal();apiError(e,'تعذّر إرسال الطلب','Could not send the request')}};
 MOD.pay=d=>{
   const p=DB.payments.find(x=>x.id===d.id);const c=ctOf(p.c);const st=S.modal.stage||'form';
-  if(st==='proc')return {head:false,cls:'narrow',body:`<div class="tc" style="padding:28px 0"><div class="spin"></div><h3 style="margin-top:18px">${T('جارٍ معالجة الدفع…','Processing payment…')}</h3><p class="mut sm">${T('لا تغلق هذه النافذة','Please keep this window open')}</p></div>`};
-  if(st==='done')return {head:false,cls:'narrow',body:`<div class="tc" style="padding:12px 0"><div class="av lg" style="margin:0 auto 14px;background:var(--oksoft);color:var(--ok)">${ic('check',30)}</div><h3>${T('تمت العملية بنجاح','Payment successful')}</h3><p class="mut" style="margin:6px 0 16px">${T('تم تحصيل','We received')} ${money(p.amount)}</p><dl class="kv" style="text-align:start"><dt>${T('رقم الإيصال','Receipt no.')}</dt><dd class="num" dir="ltr">${p.receipt}</dd><dt>${T('العقد','Contract')}</dt><dd dir="ltr">${esc(c.no)}</dd><dt>${T('الوسيلة','Method')}</dt><dd>${T(...METH[p.method])}</dd><dt>${T('التاريخ','Date')}</dt><dd>${fd(TODAY)}</dd></dl></div>`,foot:`<button class="btn" data-a="dlreceipt" data-id="${p.id}">${ic('download',16)}${T('تنزيل الإيصال','Download receipt')}</button><button class="btn pri" data-a="close">${T('تم','Done')}</button>`};
+  const gws=activeGateways();const def=gws.find(g=>g.isDefault)||gws[0];
+  if(st==='proc')return {head:false,cls:'narrow',body:`<div class="tc" style="padding:28px 0"><div class="spin"></div><h3 style="margin-top:18px">${T('جارٍ معالجة الدفع…','Processing payment…')}</h3><p class="mut sm">${T('بانتظار تأكيد بوابة الدفع من الخادم','Waiting for the gateway to confirm on the server')}</p></div>`};
+  if(st==='provider'){
+    const g=gwOf(S.modal.gateway||(gws.find(x=>x.isDefault)||gws[0]||{}).id);
+    const isSandbox=g&&g.provider==='sandbox';
+    const head=`<div class="tc" style="padding:8px 0 4px"><span class="av lg" style="margin:0 auto 14px;background:var(--infosoft);color:var(--info)">${ic('lock',26)}</span><h3>${T('إتمام الدفع لدى المزوّد','Complete payment at the provider')}</h3><p class="mut sm" style="margin:6px 0 14px">${isSandbox?T('محاكاة لصفحة بوابة الدفع. لا تُدخل بيانات بطاقة حقيقية — لا تمرّ أي بيانات بطاقة عبر إيجاري.','Simulates the gateway page. Do not enter real card details — no card data passes through Ejari.'):T('سيتم تحويلك إلى صفحة المزوّد لإتمام الدفع. يُحدَّث السداد تلقائياً عند وصول تأكيد موقّع من البوابة.','You will be sent to the provider page. The payment updates automatically when a signed confirmation arrives from the gateway.')}</p><div class="xs mut3 num" dir="ltr">${esc(S.modal.ref||'')}</div></div>`;
+    if(isSandbox)return {head:false,cls:'narrow',body:head,foot:`<button class="btn danger" data-a="sandboxfail">${T('محاكاة فشل الدفع','Simulate failure')}</button><span class="sp"></span><button class="btn brand" data-a="sandboxpay">${ic('check',16)}${T('تأكيد الدفع','Confirm payment')}</button>`};
+    return {head:false,cls:'narrow',body:head,foot:`<button class="btn" data-a="close">${T('إغلاق','Close')}</button><span class="sp"></span><button class="btn" data-a="intentrefresh">${ic('refresh',16)}${T('تحديث الحالة','Refresh status')}</button>`};
+  }
+  if(st==='done'){const paid=DB.payments.find(x=>x.id===d.id)||p;return {head:false,cls:'narrow',body:`<div class="tc" style="padding:12px 0"><div class="av lg" style="margin:0 auto 14px;background:var(--oksoft);color:var(--ok)">${ic('check',30)}</div><h3>${T('تمت العملية بنجاح','Payment successful')}</h3><p class="mut" style="margin:6px 0 16px">${T('تم تأكيد الدفع من بوابة الدفع','The gateway confirmed your payment')} · ${money(paid.amount)}</p><dl class="kv" style="text-align:start"><dt>${T('رقم الإيصال','Receipt no.')}</dt><dd class="num" dir="ltr">${paid.receipt||'—'}</dd><dt>${T('العقد','Contract')}</dt><dd dir="ltr">${esc(c.no)}</dd><dt>${T('المرجع','Reference')}</dt><dd class="num" dir="ltr">${esc(paid.txnRef||S.modal.ref||'')}</dd></dl></div>`,foot:`<button class="btn" data-a="dlreceipt" data-id="${paid.id}">${ic('download',16)}${T('تنزيل الإيصال','Download receipt')}</button><button class="btn pri" data-a="close">${T('تم','Done')}</button>`};}
+  const gw=gwOf(S.modal.gw)||def;
+  const methods=GWMETH[gw?gw.kind:'hosted']||['benefit'];
   return {title:T('الدفع الإلكتروني','Secure payment'),cls:'narrow',body:`<div class="card" style="background:var(--sf2);margin-bottom:16px"><div class="cb row"><div style="flex:1"><div class="sm mut">${p.kind==='fee'?T('رسوم تسجيل العقد','Contract registration fee'):T('إيجار','Rent')+' · '+fd(p.due)}</div><div class="xs mut3" dir="ltr">${esc(c.no)}</div></div><b style="font-size:22px" class="num">${money(p.amount)}</b></div></div>
-   <div class="col" style="gap:8px">${['benefit','card','bank'].map((m,i)=>`<label class="opt"><input type="radio" name="pm" value="${m}" ${i===0?'checked':''} data-ch="pmsel"><span class="b" style="flex:1">${T(...METH[m])}</span>${ic(m==='bank'?'building':'card',18)}</label>`).join('')}</div>
-   <div id="cardF" class="fg" style="margin-top:14px">${field(T('رقم البطاقة','Card number'),inp('cn',demoOn()?'4111 1111 1111 1111':'','text','inputmode="numeric" dir="ltr" style="text-align:start"'),'full')}${field(T('تاريخ الانتهاء','Expiry'),inp('ce',demoOn()?'12/28':'','text','dir="ltr" style="text-align:start"'))}${field('CVV',inp('cv',demoOn()?'123':'','password','dir="ltr" style="text-align:start"'))}</div><div class="hint" style="margin-top:10px">${ic('lock',13)} ${demoOn()?T('بيانات تجريبية — لا يتم خصم أي مبلغ فعلي','Demo data — no real charge is made'):T('بوابة الدفع غير مربوطة بعد — يُسجَّل السداد في النظام دون خصم فعلي','Payment gateway not connected yet — the payment is recorded in the system without a real charge')}</div>`,
+   ${gws.length>1?`<div class="col" style="gap:8px;margin-bottom:12px">${gws.map(g=>`<label class="opt"><input type="radio" name="gw" value="${g.id}" ${g.id===(gw&&gw.id)?'checked':''} data-ch="gwsel"><span class="b" style="flex:1">${gwLabel(g)}${g.testMode?` <span class="chip warn nd">${T('اختبار','Test')}</span>`:''}</span>${ic('card',18)}</label>`).join('')}</div>`:''}
+   <div class="col" style="gap:8px">${methods.map((m,i)=>`<label class="opt"><input type="radio" name="pm" value="${m}" ${i===0?'checked':''}><span class="b" style="flex:1">${T(...METH[m])}</span>${ic(m==='bank'?'building':'card',18)}</label>`).join('')}</div>
+   <div class="hint" style="margin-top:10px">${ic('lock',13)} ${T('لا تُخزَّن بيانات البطاقة في إيجاري. يتم تأكيد الدفع من الخادم عبر إشعار موقّع من بوابة الدفع.','Card data is never stored in Ejari. Payment is confirmed server-side via a signed gateway webhook.')}</div>`,
    foot:`<button class="btn" data-a="close">${T('إلغاء','Cancel')}</button><button class="btn brand" data-a="paynow" data-id="${p.id}">${ic('lock',16)}${T('ادفع','Pay')} ${money(p.amount)}</button>`};
 };
-CH.pmsel=()=>{const m=document.querySelector('input[name=pm]:checked');const f=$('#cardF');if(f)f.style.display=m&&m.value==='card'?'':'none'};
-A.paynow=async d=>{const m=(document.querySelector('input[name=pm]:checked')||{}).value||'benefit';S.modal.stage='proc';rerenderModal();
-  const wait=new Promise(res=>setTimeout(res,1000));
+CH.gwsel=()=>rerenderModal();
+A.paynow=async d=>{
+  const gwEl=document.querySelector('input[name=gw]:checked');
+  const gwId=gwEl?gwEl.value:(activeGateways().find(g=>g.isDefault)||activeGateways()[0]||{}).id;
+  const m=(document.querySelector('input[name=pm]:checked')||{}).value||'benefit';
+  if(!gwId){toast(T('لا توجد بوابة دفع مفعّلة','No payment gateway is enabled'),true);return}
+  S.modal.stage='proc';rerenderModal();
   try{
-    const [r]=await Promise.all([API.post('/api/payments/'+d.id+'/pay',{method:m}),wait]);
+    const r=await API.post('/api/payments/'+d.id+'/intent',{gatewayId:gwId,method:m});
+    const it=r.intent;
+    if(it.provider==='sandbox'){S.modal.stage='provider';S.modal.ref=it.reference;rerenderModal();return}
+    // A real hosted gateway (Tap): send the payer to its PCI-compliant page. The payment only
+    // settles on the server, via the signed webhook or the post-return verification.
+    S.modal.stage='provider';S.modal.ref=it.reference;S.modal.gateway=gwId;rerenderModal();
+    if(it.redirectUrl&&/^https?:\/\//i.test(it.redirectUrl))setTimeout(()=>{location.href=it.redirectUrl},600);
+  }catch(e){closeModal();apiError(e,'تعذّر بدء الدفع','Could not start the payment')}};
+// The sandbox "provider" returns its result through the same signed-webhook path a real one uses.
+A.sandboxpay=async()=>{await sandboxResolve('paid')};
+A.sandboxfail=async()=>{await sandboxResolve('failed')};
+A.intentrefresh=async()=>{
+  const ref=S.modal.ref;
+  try{
+    // Re-verify server-side against the provider (never trusts the browser).
+    const r=await API.post('/api/payments/intent/'+ref+'/verify');
     await refresh();
-    if(S.modal&&S.modal.t==='pay'){S.modal.stage='done';S.modal.d.id=r.payment.id;rerenderModal();render()}
-  }catch(e){closeModal();apiError(e,'تعذّر تنفيذ الدفع','Could not process the payment')}};
+    const it=(r&&r.intent)||{status:'pending'};
+    if(it.status==='paid'){S.modal.stage='done';rerenderModal();render();toast(T('تم تأكيد الدفع','Payment confirmed'))}
+    else toast(T('الحالة: '+it.status,'Status: '+it.status));
+  }catch(e){apiError(e,'تعذّر تحديث الحالة','Could not refresh the status')}
+};
+async function sandboxResolve(outcome){
+  const ref=S.modal.ref;const pid=S.modal.d.id;
+  try{
+    await API.post('/api/payments/intent/'+ref+'/sandbox-confirm',{outcome});
+    await refresh();
+    if(outcome==='paid'){S.modal.stage='done';rerenderModal();render()}
+    else{closeModal();toast(T('فشل الدفع — يمكنك المحاولة مرة أخرى','Payment failed — you can try again'),true);render()}
+  }catch(e){closeModal();apiError(e,'تعذّر تأكيد الدفع','Could not confirm the payment')}}
 
 /* ===== renewals ===== */
 V.renewals=()=>S.role==='tenant'?renewTenant():renewLandlord();

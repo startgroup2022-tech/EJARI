@@ -146,6 +146,14 @@ try {
     const restored = await call(admin4, 'GET', '/api/bootstrap');
     ok(restored.status === 200, `admin access restored once the allow-list is cleared (got ${restored.status})`);
   }
+
+  // ---- PWA assets are publicly served so the app is genuinely installable ----
+  for (const f of ['sw.js', 'manifest.webmanifest', 'assets/js/pwa.js']) {
+    const r = await fetch(`${BASE}/${f}`);
+    ok(r.status === 200, `${f} is served in production (got ${r.status})`);
+  }
+  const manifest = await (await fetch(`${BASE}/manifest.webmanifest`)).json();
+  ok(manifest.start_url && manifest.icons && manifest.icons.length > 0, 'manifest declares a start_url and icons');
 } catch (e) {
   failed++; console.error('✗ EXCEPTION', e);
 } finally {

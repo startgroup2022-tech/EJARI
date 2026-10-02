@@ -53,6 +53,9 @@ function hydrate(boot) {
   DB.services = boot.services || [];
   DB.categories = boot.categories || [];
   DB.posts = boot.posts || [];
+  DB.gateways = boot.gateways || [];
+  DB.gatewayProviders = boot.gatewayProviders || [];
+  DB.settings = boot.settings || DB.settings;
   DB.requests = (boot.requests || []).map((r) => ({ ...r, created: dt(r.created), updated: dt(r.updated), scheduledAt: dt(r.scheduledAt), completedAt: dt(r.completedAt), events: (r.events || []).map((e) => ({ ...e, t: dt(e.t) })) }));
   DB.notifLog = (boot.notificationLog || []).map((n) => ({ ...n, t: dt(n.t) }));
   TODAY = new Date(); TODAY.setHours(0, 0, 0, 0);

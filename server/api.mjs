@@ -1,5 +1,6 @@
 import { db, nowIso } from './db.mjs';
 import { hashPassword, verifyPassword, parseCookies } from './auth.mjs';
+import { providerCatalogue, providerMeta, encryptJson, decryptJson, verifySignature, verifyTapWebhook, mapProviderStatus, formatAmount, currencyDecimals } from './gateways.mjs';
 import crypto from 'node:crypto';
 
 db.exec(`CREATE TABLE IF NOT EXISTS user_prefs(user_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY(user_id,key));`);
@@ -16,6 +17,18 @@ const daysBetween = (a, b) => Math.round((new Date(a) - new Date(b)) / 86400000)
 
 function getSetting(key, fallback) { const r = db.prepare('SELECT value FROM settings WHERE key=?').get(key); return r ? r.value : fallback; }
 function setSetting(key, value) { db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value)); }
+// Full, typed snapshot of the admin-editable system settings (never includes secrets).
+function settingsSnapshot() {
+  const g = (k, d) => { const v = getSetting(k, d); return v == null ? d : v; };
+  const b = (k, d) => g(k, d) === '1';
+  return {
+    company: { ar: g('company_name_ar', 'إيجاري'), en: g('company_name_en', 'Ejari') },
+    currency: g('currency', 'BHD'), timezone: g('timezone', 'Asia/Bahrain'), locale: g('locale_default', 'ar'),
+    support: { email: g('support_email', 'info@ejari.bh'), phone: g('support_phone', '+973 1753 7070') },
+    notify: { rentDue: b('notify_rent_due', '1'), payment: b('notify_payment', '1'), expiry: b('notify_expiry', '1'), renewal: b('notify_renewal', '1'), maintenance: b('notify_maintenance', '1') },
+    email: { enabled: b('email_enabled', '0'), host: g('smtp_host', ''), port: Number(g('smtp_port', 587)), user: g('smtp_user', ''), from: g('smtp_from', 'no-reply@ejari.bh') },
+  };
+}
 function pref(userId, key, fallback) { const r = db.prepare('SELECT value FROM user_prefs WHERE user_id=? AND key=?').get(userId, key); return r ? r.value : fallback; }
 function setPref(userId, key, value) { db.prepare('INSERT INTO user_prefs(user_id,key,value) VALUES(?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value').run(userId, key, String(value)); }
 
@@ -46,7 +59,7 @@ const mapContract = (c) => ({
   check: { keys: bool(c.check_keys), meters: bool(c.check_meters), photos: bool(c.check_photos), inv: bool(c.check_inv) },
   created: c.created_at,
 });
-const mapPayment = (p) => ({ id: S(p.id), c: S(p.contract_id), kind: p.kind, due: p.due_date, amount: p.amount, status: p.status, paidOn: p.paid_on, method: p.method, receipt: p.receipt });
+const mapPayment = (p) => ({ id: S(p.id), c: S(p.contract_id), kind: p.kind, due: p.due_date, amount: p.amount, status: p.status, paidOn: p.paid_on, method: p.method, receipt: p.receipt, gateway: p.gateway_id || null, intent: p.intent_id ? S(p.intent_id) : null, txnRef: p.txn_ref || null });
 const mapMaint = (m) => ({ id: S(m.id), unit: S(m.unit_id), by: S(m.requester_id), title: { ar: m.title_ar, en: m.title_en }, cat: m.category, pri: m.priority, st: m.status, tech: m.technician, rating: m.rating, created: m.created_at });
 const mapDoc = (d) => ({ id: S(d.id), owner: S(d.owner_id), c: d.contract_id ? S(d.contract_id) : null, name: d.name, type: d.type, size: `${d.size_kb} KB`, date: d.created_at, dataUrl: d.data_url || null });
 const mapNotif = (n) => ({ id: S(n.id), ty: n.type, ar: n.text_ar, en: n.text_en, sub: { ar: n.sub_ar, en: n.sub_en }, read: bool(n.read), t: n.created_at });
@@ -67,9 +80,11 @@ function contractRow(id) { return db.prepare('SELECT * FROM contracts WHERE id=?
 function userRow(id) { return db.prepare('SELECT * FROM users WHERE id=?').get(id); }
 function unitRow(id) { return db.prepare('SELECT * FROM units WHERE id=?').get(id); }
 
-// schedule/refresh a rent-payment row's computed status (upcoming/due/overdue) based on today's date; paid rows are untouched
+// schedule/refresh a rent-payment row's computed status (upcoming/due/overdue) based on today's date;
+// rows in a terminal state (paid, refunded, or mid-payment) are never recomputed.
+const TERMINAL_PAYMENT = ['paid', 'refunded', 'processing', 'failed', 'cancelled'];
 function refreshPaymentStatus(p) {
-  if (p.status === 'paid') return p;
+  if (TERMINAL_PAYMENT.includes(p.status)) return p;
   const due = new Date(p.due_date);
   const d = daysBetween(due, today()); // positive = days until due, negative = days overdue
   const status = d < 0 ? 'overdue' : d <= 30 ? 'due' : 'upcoming';
@@ -293,6 +308,9 @@ add('GET', '/api/bootstrap', true, (req) => {
     for (const r of db.prepare('SELECT * FROM roles').all()) { perm[r.id] = {}; for (const rp of db.prepare('SELECT * FROM role_permissions WHERE role_id=?').all(r.id)) perm[r.id][rp.perm] = bool(rp.allowed); }
     body.perm = perm;
     body.fees = { reg: Number(getSetting('fee_registration', 10)), renew: Number(getSetting('fee_renewal', 5)), remind: Number(getSetting('remind_days', 3)), late: Number(getSetting('late_repeat_days', 5)), twofa: getSetting('two_factor_required', '1') === '1', session: Number(getSetting('session_timeout_min', 30)), retention: Number(getSetting('retention_months', 60)), maintenanceMode: getSetting('maintenance_mode', '0') === '1', adminIp: getSetting('admin_ip_allowlist', '') };
+    body.settings = settingsSnapshot();
+    body.gateways = db.prepare('SELECT * FROM payment_gateways ORDER BY is_default DESC, created_at').all().map(mapGateway);
+    body.gatewayProviders = providerCatalogue();
     body.services = db.prepare('SELECT * FROM services ORDER BY sort_order, id').all().map(mapService);
     body.posts = db.prepare('SELECT * FROM posts ORDER BY created_at DESC').all().map(mapPost);
     body.requests = db.prepare('SELECT * FROM service_requests ORDER BY id DESC').all().map(mapRequest);
@@ -300,6 +318,11 @@ add('GET', '/api/bootstrap', true, (req) => {
   } else if (user.role === 'landlord') {
     // tenants need to be selectable in the "new contract" wizard
     body.users = [...new Set([...userIds, ...db.prepare("SELECT id FROM users WHERE role='tenant' AND verified=1 AND status='active'").all().map((r) => r.id)])].map(userRow).filter(Boolean).map(mapUser);
+  } else {
+    // Tenants (and any other role) still need the enabled gateways to pay at checkout —
+    // but only the display fields, never credential material or admin configuration.
+    body.gateways = db.prepare('SELECT * FROM payment_gateways WHERE enabled=1 ORDER BY is_default DESC, created_at').all()
+      .map((g) => ({ id: g.id, provider: g.provider, label: { ar: g.label_ar, en: g.label_en }, kind: (providerMeta(g.provider) || {}).kind || 'hosted', enabled: true, testMode: bool(g.test_mode), currency: g.currency, isDefault: bool(g.is_default) }));
   }
   return { status: 200, body };
 });
@@ -611,6 +634,55 @@ add('POST', '/api/users/invite', true, (req) => {
   return { status: 201, body: { user: mapUser(userRow(Number(r.lastInsertRowid))), tempPassword: tempPass } };
 });
 
+// Edit a user's profile fields (name, phone, national id). Email changes are audited separately.
+add('POST', '/api/users/:id', true, (req) => {
+  if (!hasPerm(req, 'users.manage')) return { status: 403, body: { error: 'forbidden' } };
+  const u = userRow(N(req.params.id)); if (!u) return { status: 404, body: { error: 'not_found' } };
+  const b = req.body || {};
+  const nameAr = b.nameAr != null ? String(b.nameAr).trim() : u.name_ar;
+  const nameEn = b.nameEn != null ? String(b.nameEn).trim() : (b.nameAr != null ? String(b.nameAr).trim() : u.name_en);
+  if (!nameAr) return { status: 400, body: { error: 'name_required' } };
+  if (b.email != null) {
+    const email = String(b.email).toLowerCase().trim();
+    if (!/.+@.+\..+/.test(email)) return { status: 400, body: { error: 'invalid_email' } };
+    const clash = db.prepare('SELECT id FROM users WHERE email=? AND id!=?').get(email, u.id);
+    if (clash) return { status: 409, body: { error: 'email_taken' } };
+  }
+  const before = { name: u.name_en, phone: u.phone, cpr: u.cpr, email: u.email };
+  db.prepare('UPDATE users SET name_ar=?, name_en=?, phone=?, cpr=?, email=? WHERE id=?')
+    .run(nameAr, nameEn, b.phone != null ? String(b.phone) : u.phone, b.cpr != null ? String(b.cpr) : u.cpr, b.email != null ? String(b.email).toLowerCase().trim() : u.email, u.id);
+  const after = userRow(u.id);
+  auditChange(req.user.id, 'تعديل بيانات مستخدم', 'Updated user details', 'user:' + u.id, before, { name: after.name_en, phone: after.phone, cpr: after.cpr, email: after.email });
+  return { status: 200, body: { user: mapUser(after) } };
+});
+
+// Change a user's role (landlord/tenant) or, for staff, their admin sub-role.
+add('POST', '/api/users/:id/role', true, (req) => {
+  if (!hasPerm(req, 'users.manage')) return { status: 403, body: { error: 'forbidden' } };
+  const u = userRow(N(req.params.id)); if (!u) return { status: 404, body: { error: 'not_found' } };
+  const b = req.body || {};
+  const role = String(b.role || '');
+  const isStaff = role.startsWith('admin:');
+  if (!isStaff && !['landlord', 'tenant'].includes(role)) return { status: 400, body: { error: 'invalid_role' } };
+  if (isStaff && !db.prepare('SELECT id FROM roles WHERE id=?').get(role.split(':')[1])) return { status: 400, body: { error: 'invalid_sub_role' } };
+  const before = { role: u.role, sub: u.sub_role };
+  db.prepare('UPDATE users SET role=?, sub_role=? WHERE id=?').run(isStaff ? 'admin' : role, isStaff ? role.split(':')[1] : null, u.id);
+  auditChange(req.user.id, 'تغيير دور مستخدم', 'Changed user role', 'user:' + u.id, before, { role: isStaff ? 'admin' : role, sub: isStaff ? role.split(':')[1] : null });
+  return { status: 200, body: { user: mapUser(userRow(u.id)) } };
+});
+
+// Reset a user's password to a fresh temporary one. The plaintext is returned exactly once.
+add('POST', '/api/users/:id/reset-password', true, (req) => {
+  if (!hasPerm(req, 'users.manage')) return { status: 403, body: { error: 'forbidden' } };
+  const u = userRow(N(req.params.id)); if (!u) return { status: 404, body: { error: 'not_found' } };
+  const tempPass = crypto.randomBytes(6).toString('hex');
+  db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(tempPass), u.id);
+  db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);
+  notify(u.id, 'sys', 'تمت إعادة تعيين كلمة المرور بواسطة الإدارة', 'Your password was reset by an administrator');
+  audit(req.user.id, 'إعادة تعيين كلمة مرور مستخدم', 'Reset a user password', 'user:' + u.id);
+  return { status: 200, body: { ok: true, tempPassword: tempPass } };
+});
+
 add('GET', '/api/users/:id/export', true, (req) => {
   if (!hasPerm(req, 'users.view')) return { status: 403, body: { error: 'forbidden' } };
   const u = userRow(N(req.params.id)); if (!u) return { status: 404, body: { error: 'not_found' } };
@@ -751,19 +823,503 @@ add('POST', '/api/roles/:id/perm', true, (req) => {
 add('POST', '/api/settings', true, (req) => {
   if (!hasPerm(req, 'settings')) return { status: 403, body: { error: 'forbidden' } };
   const b = req.body || {};
-  const map = { reg: 'fee_registration', renew: 'fee_renewal', remind: 'remind_days', late: 'late_repeat_days', session: 'session_timeout_min', retention: 'retention_months', twofa: 'two_factor_required', maintenanceMode: 'maintenance_mode', adminIp: 'admin_ip_allowlist' };
-  for (const k of Object.keys(b)) if (map[k]) setSetting(map[k], typeof b[k] === 'boolean' ? (b[k] ? '1' : '0') : b[k]);
-  audit(req.user.id, 'حفظ إعدادات النظام', 'Saved system settings', 'settings');
-  return { status: 200, body: { ok: true } };
+  const map = {
+    reg: 'fee_registration', renew: 'fee_renewal', remind: 'remind_days', late: 'late_repeat_days',
+    session: 'session_timeout_min', retention: 'retention_months', twofa: 'two_factor_required',
+    maintenanceMode: 'maintenance_mode', adminIp: 'admin_ip_allowlist',
+    companyAr: 'company_name_ar', companyEn: 'company_name_en', currency: 'currency', timezone: 'timezone', locale: 'locale_default',
+    supportEmail: 'support_email', supportPhone: 'support_phone',
+    notifyRentDue: 'notify_rent_due', notifyPayment: 'notify_payment', notifyExpiry: 'notify_expiry', notifyRenewal: 'notify_renewal', notifyMaintenance: 'notify_maintenance',
+    emailEnabled: 'email_enabled', smtpHost: 'smtp_host', smtpPort: 'smtp_port', smtpUser: 'smtp_user', smtpFrom: 'smtp_from',
+  };
+  const changed = {};
+  for (const k of Object.keys(b)) if (map[k]) { setSetting(map[k], typeof b[k] === 'boolean' ? (b[k] ? '1' : '0') : b[k]); changed[map[k]] = b[k]; }
+  auditChange(req.user.id, 'حفظ إعدادات النظام', 'Saved system settings', 'settings', null, changed);
+  return { status: 200, body: { ok: true, settings: settingsSnapshot() } };
 });
 
 // ================= REFUNDS (admin) =================
-add('POST', '/api/refunds/:id', true, (req) => {
+add('POST', '/api/refunds/:id', true, async (req) => {
   if (!hasPerm(req, 'payments.refund')) return { status: 403, body: { error: 'forbidden' } };
-  const status = bool((req.body || {}).approve) ? 'approved' : 'rejected';
-  db.prepare('UPDATE refunds SET status=? WHERE id=?').run(status, req.params.id);
-  audit(req.user.id, status === 'approved' ? 'اعتماد استرجاع' : 'رفض استرجاع', status === 'approved' ? 'Approved refund' : 'Rejected refund', req.params.id);
+  const r = db.prepare('SELECT * FROM refunds WHERE id=?').get(req.params.id);
+  if (!r) return { status: 404, body: { error: 'not_found' } };
+  const approve = bool((req.body || {}).approve);
+  if (!approve) {
+    db.prepare("UPDATE refunds SET status='rejected' WHERE id=?").run(r.id);
+    audit(req.user.id, 'رفض استرجاع', 'Rejected refund', r.id);
+    const c = contractRow(r.contract_id);
+    if (c) notify(c.tenant_id, 'pay', 'تم رفض طلب الاسترجاع', 'Your refund request was rejected', r.id, r.id);
+    return { status: 200, body: { ok: true, status: 'rejected' } };
+  }
+  // Approval actually moves the money: run the real provider refund (if any) and settle the ledger.
+  const p = r.payment_id ? paymentRow(r.payment_id) : db.prepare("SELECT * FROM payments WHERE contract_id=? AND status='paid' ORDER BY id DESC LIMIT 1").get(r.contract_id);
+  if (!p || p.status !== 'paid') {
+    db.prepare("UPDATE refunds SET status='rejected' WHERE id=?").run(r.id);
+    return { status: 409, body: { error: 'not_refundable' } };
+  }
+  db.prepare("UPDATE refunds SET status='approved', payment_id=? WHERE id=?").run(p.id, r.id);
+  const out = await settleRefund(req, p, { amount: r.amount, reasonAr: r.reason_ar, reasonEn: r.reason_en });
+  if (out.status !== 200) {
+    // Roll back the approval if the provider refused the refund.
+    db.prepare("UPDATE refunds SET status='pending' WHERE id=?").run(r.id);
+    return out;
+  }
+  return { status: 200, body: { ok: true, status: 'approved', ...out.body } };
+});
+
+// A tenant asks for a refund on a payment they made. Creates a pending request the admin
+// reviews; it only becomes a real refund (with a provider call) once approved.
+add('POST', '/api/refunds', true, (req) => {
+  const b = req.body || {};
+  const p = paymentRow(N(b.paymentId));
+  if (!p) return { status: 404, body: { error: 'not_found' } };
+  const c = contractRow(p.contract_id);
+  if (req.user.id !== c.tenant_id && req.user.role !== 'admin') return { status: 403, body: { error: 'forbidden' } };
+  if (p.status !== 'paid') return { status: 400, body: { error: 'not_refundable' } };
+  const existing = db.prepare("SELECT id FROM refunds WHERE payment_id=? AND status IN ('approved','pending')").get(p.id);
+  if (existing) return { status: 409, body: { error: 'already_requested', refund: existing.id } };
+  const amount = b.amount != null ? Number(b.amount) : p.amount;
+  if (!(amount > 0 && amount <= p.amount)) return { status: 400, body: { error: 'invalid_amount' } };
+  const id = 'RR-' + crypto.randomBytes(5).toString('hex');
+  db.prepare('INSERT INTO refunds(id,contract_id,amount,reason_ar,reason_en,status,payment_id,created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run(id, p.contract_id, amount, String(b.reasonAr || 'طلب استرجاع'), String(b.reasonEn || 'Refund request'), 'pending', p.id, nowIso());
+  db.prepare('INSERT INTO notifications(user_id,type,text_ar,text_en,sub_ar,sub_en,read,created_at) SELECT id,?,?,?,?,?,0,? FROM users WHERE role=?')
+    .run('pay', 'طلب استرجاع جديد', 'New refund request', `${amount} د.ب`, `BD ${amount}`, nowIso(), 'admin');
+  audit(req.user.id, 'طلب استرجاع', 'Requested a refund', 'payment:' + p.id);
+  return { status: 201, body: { ok: true, refund: id, status: 'pending', amount } };
+});
+
+// ================= PAYMENT GATEWAYS (admin-managed) =================
+const gatewayRow = (id) => db.prepare('SELECT * FROM payment_gateways WHERE id=?').get(id);
+// Never leak credentials: expose only which fields are configured, plus a masked hint.
+function mapGateway(g) {
+  const meta = providerMeta(g.provider);
+  const cfg = decryptJson(g.config_enc) || {};
+  const configured = {};
+  for (const f of (meta ? meta.fields : [])) {
+    const v = cfg[f.key];
+    configured[f.key] = f.secret ? (v ? '••••••' + String(v).slice(-3) : '') : (v || '');
+  }
+  return {
+    id: g.id, provider: g.provider, providerName: meta ? meta.name : { ar: g.provider, en: g.provider },
+    label: { ar: g.label_ar, en: g.label_en }, kind: meta ? meta.kind : 'hosted',
+    enabled: bool(g.enabled), testMode: bool(g.test_mode), isDefault: bool(g.is_default), currency: g.currency,
+    mode: g.test_mode ? 'sandbox' : 'live',
+    configured, hasWebhookSecret: !!g.webhook_secret_enc,
+    webhookPath: `/api/webhooks/${g.id}`,
+    returnUrl: cfg.returnUrl || null,
+    supportsRefund: !!(meta && typeof meta.refund === 'function'),
+    apiCapable: !!(meta && typeof meta.createCharge === 'function'),
+    updated: g.updated_at,
+  };
+}
+
+add('GET', '/api/gateways/providers', true, (req) => {
+  if (!hasPerm(req, 'settings')) return { status: 403, body: { error: 'forbidden' } };
+  return { status: 200, body: { providers: providerCatalogue() } };
+});
+add('GET', '/api/gateways', true, (req) => {
+  if (!hasPerm(req, 'settings')) return { status: 403, body: { error: 'forbidden' } };
+  return { status: 200, body: { gateways: db.prepare('SELECT * FROM payment_gateways ORDER BY is_default DESC, created_at').all().map(mapGateway) } };
+});
+// Public: which gateways a payer may choose at checkout (no secrets, only display data).
+add('GET', '/api/gateways/available', false, () => ({
+  status: 200,
+  body: {
+    gateways: db.prepare('SELECT * FROM payment_gateways WHERE enabled=1 ORDER BY is_default DESC, created_at').all()
+      .map((g) => ({ id: g.id, provider: g.provider, label: { ar: g.label_ar, en: g.label_en }, kind: (providerMeta(g.provider) || {}).kind || 'hosted', testMode: bool(g.test_mode), currency: g.currency })),
+  },
+}));
+
+add('POST', '/api/gateways', true, (req) => {
+  if (!hasPerm(req, 'settings')) return { status: 403, body: { error: 'forbidden' } };
+  const b = req.body || {};
+  const meta = providerMeta(b.provider);
+  if (!meta) return { status: 400, body: { error: 'unknown_provider' } };
+  const labelAr = String(b.labelAr || '').trim() || meta.name.ar;
+  const labelEn = String(b.labelEn || '').trim() || meta.name.en;
+  const id = 'gw_' + crypto.randomBytes(6).toString('hex');
+  const cfg = {};
+  for (const f of meta.fields) if (b.config && b.config[f.key] != null) cfg[f.key] = String(b.config[f.key]);
+  for (const f of meta.fields) if (f.required && !cfg[f.key]) return { status: 400, body: { error: 'missing_field', field: f.key } };
+  const webhookSecret = b.webhookSecret ? String(b.webhookSecret) : crypto.randomBytes(24).toString('hex');
+  const enabled = bool(b.enabled) ? 1 : 0;
+  const makeDefault = bool(b.isDefault);
+  if (makeDefault) db.prepare('UPDATE payment_gateways SET is_default=0').run();
+  db.prepare(`INSERT INTO payment_gateways(id,provider,label_ar,label_en,enabled,test_mode,is_default,currency,config_enc,webhook_secret_enc,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(id, meta.id, labelAr, labelEn, enabled, b.testMode === false ? 0 : 1, makeDefault ? 1 : 0, String(b.currency || 'BHD'), encryptJson(cfg), encryptJson({ secret: webhookSecret }), nowIso(), nowIso());
+  auditChange(req.user.id, 'إضافة بوابة دفع', 'Added payment gateway', 'gateway:' + id, null, { provider: meta.id, enabled: !!enabled });
+  return { status: 201, body: { gateway: mapGateway(gatewayRow(id)) } };
+});
+
+add('POST', '/api/gateways/:id', true, (req) => {
+  if (!hasPerm(req, 'settings')) return { status: 403, body: { error: 'forbidden' } };
+  const g = gatewayRow(req.params.id);
+  if (!g) return { status: 404, body: { error: 'not_found' } };
+  const b = req.body || {};
+  const meta = providerMeta(g.provider);
+  const before = { enabled: bool(g.enabled), testMode: bool(g.test_mode), isDefault: bool(g.is_default), currency: g.currency };
+  // Merge credentials: only overwrite the keys that were actually supplied (blank secret keeps the old one).
+  // Values that are only a mask of the stored secret are ignored so a round-tripped edit can never clobber it.
+  const cfg = decryptJson(g.config_enc) || {};
+  if (b.config) for (const f of meta.fields) {
+    const v = b.config[f.key];
+    if (v == null || String(v) === '') continue;
+    if (f.secret && /^•+/.test(String(v))) continue;
+    cfg[f.key] = String(v);
+  }
+  const webhookSecretEnc = b.webhookSecret ? encryptJson({ secret: String(b.webhookSecret) }) : g.webhook_secret_enc;
+  const enabled = b.enabled != null ? (bool(b.enabled) ? 1 : 0) : g.enabled;
+  const isDefault = b.isDefault != null ? (bool(b.isDefault) ? 1 : 0) : g.is_default;
+  if (isDefault) db.prepare('UPDATE payment_gateways SET is_default=0 WHERE id!=?').run(g.id);
+  db.prepare(`UPDATE payment_gateways SET label_ar=?,label_en=?,enabled=?,test_mode=?,is_default=?,currency=?,config_enc=?,webhook_secret_enc=?,updated_at=? WHERE id=?`)
+    .run(b.labelAr != null ? String(b.labelAr) : g.label_ar, b.labelEn != null ? String(b.labelEn) : g.label_en,
+      enabled, b.testMode != null ? (bool(b.testMode) ? 1 : 0) : g.test_mode, isDefault,
+      b.currency != null ? String(b.currency) : g.currency, encryptJson(cfg), webhookSecretEnc, nowIso(), g.id);
+  const after = gatewayRow(g.id);
+  auditChange(req.user.id, 'تعديل بوابة دفع', 'Updated payment gateway', 'gateway:' + g.id, before, { enabled: bool(after.enabled), testMode: bool(after.test_mode), isDefault: bool(after.is_default), currency: after.currency });
+  return { status: 200, body: { gateway: mapGateway(after) } };
+});
+
+add('DELETE', '/api/gateways/:id', true, (req) => {
+  if (!hasPerm(req, 'settings')) return { status: 403, body: { error: 'forbidden' } };
+  const g = gatewayRow(req.params.id);
+  if (!g) return { status: 404, body: { error: 'not_found' } };
+  const used = db.prepare('SELECT COUNT(*) c FROM payment_intents WHERE gateway_id=?').get(g.id).c;
+  if (used) return { status: 409, body: { error: 'gateway_in_use', intents: used } };
+  db.prepare('DELETE FROM payment_gateways WHERE id=?').run(g.id);
+  audit(req.user.id, 'حذف بوابة دفع', 'Deleted payment gateway', 'gateway:' + g.id);
   return { status: 200, body: { ok: true } };
+});
+
+add('POST', '/api/gateways/:id/test', true, async (req) => {
+  if (!hasPerm(req, 'settings')) return { status: 403, body: { error: 'forbidden' } };
+  const g = gatewayRow(req.params.id);
+  if (!g) return { status: 404, body: { error: 'not_found' } };
+  const meta = providerMeta(g.provider);
+  const cfg = decryptJson(g.config_enc) || {};
+  const t0 = Date.now();
+  let result;
+  try { result = await meta.ping(cfg); } catch (e) { result = { ok: false, error: 'ping_failed' }; }
+  const latencyMs = result.latencyMs != null ? result.latencyMs : Date.now() - t0;
+  audit(req.user.id, result.ok ? 'اختبار اتصال بوابة ناجح' : 'اختبار اتصال بوابة فاشل', result.ok ? 'Gateway connection test succeeded' : 'Gateway connection test failed', 'gateway:' + g.id);
+  return { status: 200, body: { ok: !!result.ok, latencyMs, note: result.note || null, error: result.error || null } };
+});
+
+// A genuine test charge: creates a real intent against the gateway. For the sandbox provider it
+// auto-completes; for a real hosted provider (Tap) it creates an actual charge and returns the
+// provider page URL so the operator can complete it. No card data is involved.
+add('POST', '/api/gateways/:id/test-payment', true, async (req) => {
+  if (!hasPerm(req, 'settings')) return { status: 403, body: { error: 'forbidden' } };
+  const g = gatewayRow(req.params.id);
+  if (!g) return { status: 404, body: { error: 'not_found' } };
+  if (!g.enabled) return { status: 400, body: { error: 'gateway_disabled' } };
+  const amount = Number((req.body || {}).amount) || 1;
+  const reference = 'TEST-' + crypto.randomBytes(6).toString('hex');
+  const meta = providerMeta(g.provider);
+  const cfg = decryptJson(g.config_enc) || {};
+
+  let providerRef = null;
+  let redirectUrl = null;
+  let status = 'pending';
+  if (meta && typeof meta.createCharge === 'function') {
+    const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+    const scheme = (req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https') ? 'https' : 'http';
+    const base = host ? `${scheme}://${host}` : '';
+    const charge = await meta.createCharge(cfg, {
+      amount, currency: g.currency, reference, description: `Ejari gateway test ${reference}`,
+      customer: { firstName: 'Ejari', lastName: 'Admin', email: (req.user && req.user.email) || 'admin@ejari.bh' },
+      returnUrl: cfg.returnUrl || (base ? `${base}/dashboard.html` : ''),
+      webhookUrl: cfg.webhookUrl || (base ? `${base}/api/webhooks/${g.id}` : ''),
+    });
+    if (!charge.ok) {
+      auditChange(req.user.id, 'فشل دفعة اختبار', 'Gateway test payment failed', 'gateway:' + g.id, null, { reference, error: charge.error });
+      return { status: 502, body: { error: 'provider_error', detail: charge.error } };
+    }
+    providerRef = charge.providerRef;
+    redirectUrl = charge.redirectUrl;
+    status = 'processing';
+  }
+
+  const r = db.prepare(`INSERT INTO payment_intents(reference,payment_id,contract_id,user_id,gateway_id,provider,amount,currency,status,method,provider_ref,redirect_url,test_mode,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(reference, null, null, req.user.id, g.id, g.provider, amount, g.currency, status, null, providerRef, redirectUrl, 1, nowIso(), nowIso());
+  const id = Number(r.lastInsertRowid);
+  // The sandbox provider auto-confirms; a real provider settles via webhook/verification.
+  if (g.provider === 'sandbox') {
+    db.prepare("UPDATE payment_intents SET status='paid', provider_ref=?, completed_at=?, updated_at=? WHERE id=?").run('SANDBOX-' + reference, nowIso(), nowIso(), id);
+  }
+  auditChange(req.user.id, 'إجراء دفعة اختبار', 'Ran a gateway test payment', 'gateway:' + g.id, null, { reference, amount, provider: g.provider });
+  const intent = db.prepare('SELECT * FROM payment_intents WHERE id=?').get(id);
+  return { status: 200, body: { intent: mapIntent(intent), provider: meta.id, redirectUrl } };
+});
+
+// ================= PAYMENT FLOW: intents, webhooks, verification =================
+const mapIntent = (i) => ({
+  id: S(i.id), reference: i.reference, payment: S(i.payment_id), contract: S(i.contract_id), user: S(i.user_id),
+  gateway: i.gateway_id, provider: i.provider, amount: i.amount, currency: i.currency, status: i.status,
+  method: i.method, providerRef: i.provider_ref, redirectUrl: i.redirect_url, failureReason: i.failure_reason,
+  verified: !!i.verified, testMode: bool(i.test_mode), created: i.created_at, updated: i.updated_at, completed: i.completed_at,
+});
+const intentRow = (ref) => db.prepare('SELECT * FROM payment_intents WHERE reference=?').get(ref);
+
+function failPayment(paymentId, reason) {
+  db.prepare("UPDATE payments SET status='failed' WHERE id=?").run(paymentId);
+  return reason;
+}
+
+// The single, authoritative transition point. Only this function may mark a payment `paid`.
+// It is reached exclusively through a signature-verified webhook or a server-side provider
+// query — never from a client redirect.
+//
+// For hosted providers (Tap) the webhook is trusted only after the server independently
+// re-queries the provider for the authoritative status (`verifyCharge`). A forged or
+// out-of-band payload can therefore never settle a payment.
+function processWebhook({ gatewayId, eventId, reference, status, providerRef, raw, verified }) {
+  const gw = gatewayRow(gatewayId);
+  if (!gw) return { status: 404, body: { error: 'unknown_gateway' } };
+  const intent = intentRow(reference);
+  if (!intent) return { status: 404, body: { error: 'unknown_reference' } };
+  // Replay protection: a given provider event id is processed at most once.
+  const seen = db.prepare('SELECT event_id FROM webhook_events WHERE event_id=?').get(eventId);
+  if (seen) return { status: 200, body: { ok: true, duplicate: true } };
+  db.prepare('INSERT INTO webhook_events(event_id,gateway_id,intent_reference,status,signature_ok,received_at) VALUES (?,?,?,?,1,?)')
+    .run(eventId, gatewayId, reference, status, nowIso());
+
+  // Idempotency: a terminal intent is never transitioned twice (guards duplicate webhooks,
+  // replay, double payment and duplicate receipts).
+  if (['paid', 'refunded'].includes(intent.status)) return { status: 200, body: { ok: true, alreadyFinal: intent.status } };
+
+  const finalStatus = ['paid', 'failed', 'cancelled', 'refunded'].includes(status) ? status : 'processing';
+  db.prepare('UPDATE payment_intents SET status=?, provider_ref=?, verified=?, updated_at=?, completed_at=? WHERE id=?')
+    .run(finalStatus, providerRef || intent.provider_ref || null, verified ? 1 : 0, nowIso(), ['paid', 'failed', 'cancelled'].includes(finalStatus) ? nowIso() : null, intent.id);
+
+  if (finalStatus === 'paid') {
+    const p = paymentRow(intent.payment_id);
+    if (p && p.status !== 'paid') {
+      const receipt = receiptNo();
+      db.prepare("UPDATE payments SET status='paid', paid_on=?, method=?, receipt=?, gateway_id=?, intent_id=?, txn_ref=? WHERE id=?")
+        .run(nowIso().slice(0, 10), intent.method || intent.provider, receipt, gatewayId, intent.id, providerRef || null, p.id);
+      const c = contractRow(p.contract_id);
+      if (c) {
+        if (p.kind === 'fee') { db.prepare("UPDATE contracts SET status='active' WHERE id=?").run(c.id); notify(c.landlord_id, 'contract', `تم تفعيل العقد ${c.no}`, `Contract ${c.no} is now active`); }
+        const tenant = userRow(c.tenant_id);
+        notify(c.landlord_id, 'pay', `تم استلام دفعة من ${tenant ? tenant.name_ar : ''}`, `Payment received from ${tenant ? tenant.name_en : ''}`, `${p.amount} د.ب`, `BD ${p.amount}`);
+        notify(c.tenant_id, 'pay', `تم تأكيد دفعتك ${receipt}`, `Your payment ${receipt} is confirmed`, `${p.amount} د.ب`, `BD ${p.amount}`);
+        db.prepare('INSERT INTO documents(owner_id,contract_id,name,type,size_kb,created_at) VALUES (?,?,?,?,?,?)').run(c.tenant_id, c.id, `إيصال دفع ${receipt}.pdf`, 'receipt', 90, nowIso());
+        db.prepare('INSERT INTO documents(owner_id,contract_id,name,type,size_kb,created_at) VALUES (?,?,?,?,?,?)').run(c.landlord_id, c.id, `إيصال دفع ${receipt}.pdf`, 'receipt', 90, nowIso());
+      }
+    }
+  } else if (['failed', 'cancelled'].includes(finalStatus)) {
+    // Return the schedule row to its natural, unpaid state so the tenant can retry.
+    const p = paymentRow(intent.payment_id);
+    if (p && p.status !== 'paid') db.prepare("UPDATE payments SET status='overdue' WHERE id=?").run(p.id);
+    const c = contractRow(intent.contract_id);
+    if (c) notify(c.tenant_id, 'pay', `لم تكتمل الدفعة ${intent.reference}`, `Payment ${intent.reference} did not complete`, '', '');
+  }
+  audit(null, 'معالجة إشعار دفع', 'Processed payment webhook', 'intent:' + reference);
+  return { status: 200, body: { ok: true, status: finalStatus } };
+}
+
+// Ask the provider itself what happened to a charge. Returns a normalised status string
+// ('paid' | 'failed' | 'processing') or null when the provider cannot be reached.
+async function verifyChargeWithProvider(gw, providerRef) {
+  const meta = providerMeta(gw.provider);
+  if (!meta || typeof meta.retrieveCharge !== 'function' || !providerRef) return null;
+  const cfg = decryptJson(gw.config_enc) || {};
+  const r = await meta.retrieveCharge(cfg, providerRef);
+  if (!r.ok || !r.charge) return null;
+  return mapProviderStatus(gw.provider, r.charge.status);
+}
+
+// Public webhook endpoint. Two verification schemes are supported:
+//   • generic gateways: HMAC-SHA256 over the raw body in `X-Ejari-Signature`
+//   • Tap Payments:     HMAC-SHA256 `hashstring` header over Tap's canonical string
+// A valid signature alone is not enough for a hosted provider: the charge is re-queried
+// server-side before the payment is allowed to settle.
+add('POST', '/api/webhooks/:gatewayId', false, async (req) => {
+  const gw = gatewayRow(req.params.gatewayId);
+  if (!gw) return { status: 404, body: { error: 'unknown_gateway' } };
+  const stored = decryptJson(gw.webhook_secret_enc) || {};
+  const cfg = decryptJson(gw.config_enc) || {};
+  const raw = req.rawBody != null ? req.rawBody : JSON.stringify(req.body || {});
+  const b = req.body || {};
+
+  let sigOk = false;
+  let eventId = '';
+  let reference = '';
+  let status = '';
+  let providerRef = '';
+  let verifyFailed = false;
+
+  if (gw.provider === 'tap') {
+    // Tap's signing secret is the API secret key unless a dedicated webhook secret was set.
+    const secret = cfg.webhookSecret || stored.secret || cfg.secretKey;
+    const presented = req.headers['hashstring'] || req.headers['x-tap-signature'] || '';
+    sigOk = verifyTapWebhook(secret, b, presented);
+    // Tap reuses the charge id across status changes, so the event id must also carry the
+    // status to stay unique while still deduplicating a genuine replay of the same event.
+    eventId = String(b.id || '') + ':' + String(b.status || '');
+    // Our idempotency reference travels in metadata.udf1 / reference.order / reference.transaction.
+    reference = String((b.metadata && b.metadata.udf1) || (b.reference && (b.reference.order || b.reference.transaction)) || '');
+    providerRef = String(b.id || '');
+    status = mapProviderStatus('tap', b.status) || '';
+    // Independent server-side verification of the authoritative charge state.
+    if (sigOk && providerRef) {
+      const verified = await verifyChargeWithProvider(gw, providerRef);
+      if (verified) status = verified;
+      else verifyFailed = true; // signature fine, but we could not confirm with Tap
+    }
+  } else {
+    sigOk = verifySignature(stored.secret, raw, req.headers['x-ejari-signature'] || req.headers['x-signature'] || '');
+    eventId = String(b.eventId || b.id || '');
+    reference = String(b.reference || '');
+    status = String(b.status || '');
+    providerRef = String(b.providerRef || '');
+  }
+
+  db.prepare('INSERT OR IGNORE INTO webhook_events(event_id,gateway_id,intent_reference,status,signature_ok,received_at) VALUES (?,?,?,?,?,?)')
+    .run((sigOk ? 'evt-' : 'sigfail-') + (eventId || crypto.randomBytes(8).toString('hex')), gw.id, reference || null, status || 'rejected', sigOk ? 1 : 0, nowIso());
+  if (!sigOk) return { status: 401, body: { error: 'bad_signature' } };
+  // A verified signature we could not confirm with the provider is retryable, not a rejection.
+  if (verifyFailed) return { status: 502, body: { error: 'verification_unavailable' } };
+  if (!eventId || !reference) return { status: 400, body: { error: 'invalid_payload' } };
+  return processWebhook({ gatewayId: gw.id, eventId, reference, status, providerRef, raw, verified: gw.provider === 'tap' });
+});
+
+// Server-side status query (a provider that exposes a query API). Also the only other path
+// that can move an intent to a terminal state without a webhook.
+add('GET', '/api/payments/intent/:reference', true, (req) => {
+  const intent = intentRow(req.params.reference);
+  if (!intent) return { status: 404, body: { error: 'not_found' } };
+  const c = contractRow(intent.contract_id);
+  const mine = intent.user_id === req.user.id || req.user.role === 'admin' || (c && c.landlord_id === req.user.id);
+  if (!mine) return { status: 403, body: { error: 'forbidden' } };
+  return { status: 200, body: { intent: mapIntent(intent), payment: intent.payment_id ? mapPayment(paymentRow(intent.payment_id)) : null } };
+});
+
+// Tenant/landlord starts a payment: creates a real intent and returns where to send the payer.
+add('POST', '/api/payments/:id/intent', true, async (req) => {
+  const p = paymentRow(N(req.params.id));
+  if (!p) return { status: 404, body: { error: 'not_found' } };
+  const c = contractRow(p.contract_id);
+  if (req.user.id !== c.tenant_id && req.user.role !== 'admin') return { status: 403, body: { error: 'forbidden' } };
+  if (p.status === 'paid') return { status: 409, body: { error: 'already_paid' } };
+  const b = req.body || {};
+  let gw = b.gatewayId ? gatewayRow(b.gatewayId) : db.prepare('SELECT * FROM payment_gateways WHERE enabled=1 AND is_default=1').get() || db.prepare('SELECT * FROM payment_gateways WHERE enabled=1 ORDER BY created_at LIMIT 1').get();
+  if (!gw || !gw.enabled) return { status: 400, body: { error: 'no_gateway' } };
+  // Idempotency: reuse a still-open intent for the same payment+gateway instead of double-charging.
+  const open = db.prepare("SELECT * FROM payment_intents WHERE payment_id=? AND gateway_id=? AND status IN ('pending','processing') ORDER BY id DESC LIMIT 1").get(p.id, gw.id);
+  if (open) return { status: 200, body: { intent: mapIntent(open), reused: true } };
+  const reference = 'PI-' + crypto.randomBytes(8).toString('hex');
+  const method = b.method ? String(b.method) : null;
+  const meta = providerMeta(gw.provider);
+  const cfg = decryptJson(gw.config_enc) || {};
+  const redirect = `/pay.html?ref=${reference}`;
+
+  // Hosted provider (Tap): create the charge server-side and hand back the provider page.
+  let providerRef = null;
+  let redirectUrl = redirect;
+  if (meta && typeof meta.createCharge === 'function') {
+    const tenant = userRow(c.tenant_id);
+    const host = (req.headers['x-forwarded-host'] || req.headers.host || '');
+    const scheme = (req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https') ? 'https' : 'http';
+    const base = host ? `${scheme}://${host}` : '';
+    const webhookUrl = cfg.webhookUrl || (base ? `${base}/api/webhooks/${gw.id}` : '');
+    const returnUrl = cfg.returnUrl || (base ? `${base}${redirect}` : '');
+    const charge = await meta.createCharge(cfg, {
+      amount: p.amount, currency: gw.currency, reference,
+      description: `Ejari rent ${c.no} — ${reference}`,
+      customer: tenant ? { firstName: tenant.name_en || tenant.name_ar, lastName: '', email: tenant.email } : null,
+      returnUrl, webhookUrl,
+    });
+    if (!charge.ok) {
+      audit(req.user.id, 'فشل إنشاء عملية دفع', 'Failed to create a provider charge', `${reference}:${charge.error}`);
+      return { status: 502, body: { error: 'provider_error', detail: charge.error } };
+    }
+    providerRef = charge.providerRef;
+    redirectUrl = charge.redirectUrl || redirect;
+  }
+
+  const r = db.prepare(`INSERT INTO payment_intents(reference,payment_id,contract_id,user_id,gateway_id,provider,amount,currency,status,method,provider_ref,redirect_url,test_mode,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(reference, p.id, c.id, req.user.id, gw.id, gw.provider, p.amount, gw.currency, providerRef ? 'processing' : 'pending', method, providerRef, redirectUrl, gw.test_mode, nowIso(), nowIso());
+  db.prepare("UPDATE payments SET status='processing', gateway_id=?, intent_id=? WHERE id=?").run(gw.id, Number(r.lastInsertRowid), p.id);
+  audit(req.user.id, 'إنشاء عملية دفع', 'Created a payment intent', reference);
+  return { status: 201, body: { intent: mapIntent(db.prepare('SELECT * FROM payment_intents WHERE id=?').get(Number(r.lastInsertRowid))) } };
+});
+
+// Re-verify an in-flight intent against the provider (server-side), so a payer who returns
+// without a webhook still settles correctly. Never trusts the client's word.
+add('POST', '/api/payments/intent/:reference/verify', true, async (req) => {
+  const intent = intentRow(req.params.reference);
+  if (!intent) return { status: 404, body: { error: 'not_found' } };
+  if (intent.user_id !== req.user.id && req.user.role !== 'admin') return { status: 403, body: { error: 'forbidden' } };
+  if (['paid', 'refunded'].includes(intent.status)) return { status: 200, body: { intent: mapIntent(intent), alreadyFinal: intent.status } };
+  const gw = gatewayRow(intent.gateway_id);
+  const status = await verifyChargeWithProvider(gw, intent.provider_ref);
+  if (!status) return { status: 200, body: { intent: mapIntent(intent), pending: true } };
+  const r = processWebhook({ gatewayId: gw.id, eventId: 'verify-' + intent.reference + '-' + status, reference: intent.reference, status, providerRef: intent.provider_ref, verified: true });
+  return { status: 200, body: { intent: mapIntent(intentRow(intent.reference)), result: r.body } };
+});
+
+// Sandbox-provider confirmation. Acts as the provider's server: it builds and signs the very
+// same webhook payload a real gateway would POST, then routes it through processWebhook().
+// Only usable for the built-in sandbox provider — never for a live gateway.
+add('POST', '/api/payments/intent/:reference/sandbox-confirm', true, (req) => {
+  const intent = intentRow(req.params.reference);
+  if (!intent) return { status: 404, body: { error: 'not_found' } };
+  if (intent.provider !== 'sandbox') return { status: 403, body: { error: 'not_sandbox' } };
+  if (intent.user_id !== req.user.id && req.user.role !== 'admin') return { status: 403, body: { error: 'forbidden' } };
+  const outcome = (req.body || {}).outcome === 'failed' ? 'failed' : 'paid';
+  const gw = gatewayRow(intent.gateway_id);
+  const payload = { eventId: 'evt_' + crypto.randomBytes(8).toString('hex'), reference: intent.reference, status: outcome, providerRef: 'SANDBOX-' + intent.reference };
+  return processWebhook({ gatewayId: gw.id, eventId: payload.eventId, reference: payload.reference, status: payload.status, providerRef: payload.providerRef });
+});
+
+// Execute a refund against the gateway (real provider call) and settle it in the ledger.
+// Shared by the direct admin refund and by approving a tenant's refund request.
+// Returns { status, body }.
+async function settleRefund(req, p, { amount, reasonAr, reasonEn }) {
+  const intent = p.intent_id ? db.prepare('SELECT * FROM payment_intents WHERE id=?').get(p.intent_id) : null;
+  const gw = p.gateway_id ? gatewayRow(p.gateway_id) : (intent ? gatewayRow(intent.gateway_id) : null);
+  const meta = gw ? providerMeta(gw.provider) : null;
+  const id = 'RF-' + crypto.randomBytes(5).toString('hex');
+  let providerRef = null;
+
+  if (gw && meta && typeof meta.refund === 'function' && intent && intent.provider_ref) {
+    const cfg = decryptJson(gw.config_enc) || {};
+    const r = await meta.refund(cfg, { chargeId: intent.provider_ref, amount, currency: gw.currency, reason: 'requested_by_customer' });
+    if (!r.ok) {
+      auditChange(req.user.id, 'فشل استرجاع دفعة', 'Refund failed at the provider', 'payment:' + p.id, null, { error: r.error, amount });
+      return { status: 502, body: { error: 'provider_error', detail: r.error } };
+    }
+    providerRef = r.refundId || null;
+  }
+
+  db.prepare('INSERT INTO refunds(id,contract_id,amount,reason_ar,reason_en,status,payment_id,gateway_id,provider,provider_ref,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, p.contract_id, amount, String(reasonAr || 'استرجاع'), String(reasonEn || 'Refund'), 'approved', p.id, gw ? gw.id : null, gw ? gw.provider : null, providerRef, nowIso());
+  db.prepare("UPDATE payments SET status='refunded' WHERE id=?").run(p.id);
+  if (p.intent_id) db.prepare("UPDATE payment_intents SET status='refunded', updated_at=? WHERE id=?").run(nowIso(), p.intent_id);
+  const c = contractRow(p.contract_id);
+  if (c) notify(c.tenant_id, 'pay', `تم استرجاع مبلغ ${amount} د.ب`, `A refund of BD ${amount} was issued`, id, id);
+  auditChange(req.user.id, 'استرجاع دفعة', 'Refunded a payment', 'payment:' + p.id, { status: 'paid' }, { status: 'refunded', amount, provider: gw ? gw.provider : null });
+  return { status: 200, body: { ok: true, refund: id, amount, providerRef, payment: mapPayment(paymentRow(p.id)) } };
+}
+
+// Refund a settled payment through its gateway (real provider call + status transition + audit).
+// For API-capable gateways (Tap) the refund is executed at the provider first; the local ledger
+// is only updated once the provider confirms. For manual gateways the admin records the refund.
+add('POST', '/api/payments/:id/refund', true, async (req) => {
+  if (!hasPerm(req, 'payments.refund')) return { status: 403, body: { error: 'forbidden' } };
+  const p = paymentRow(N(req.params.id));
+  if (!p) return { status: 404, body: { error: 'not_found' } };
+  if (p.status !== 'paid') return { status: 400, body: { error: 'not_refundable' } };
+  // Duplicate-refund protection: a payment already refunded is never refunded twice.
+  const existing = db.prepare("SELECT id FROM refunds WHERE payment_id=? AND status IN ('approved','pending')").get(p.id);
+  if (existing) return { status: 409, body: { error: 'already_refunded', refund: existing.id } };
+  const b = req.body || {};
+  const amount = b.amount != null ? Number(b.amount) : p.amount;
+  if (!(amount > 0 && amount <= p.amount)) return { status: 400, body: { error: 'invalid_amount' } };
+  return settleRefund(req, p, { amount, reasonAr: b.reasonAr, reasonEn: b.reasonEn });
 });
 
 // ================= MIDDLEWARE-FACING HELPERS =================
@@ -1147,7 +1703,7 @@ add('GET', '/api/export/:kind', true, (req) => {
     if (req.user.role === 'admin' && !hasPerm(req, 'payments.view')) return { status: 403, body: { error: 'forbidden' } };
     const cs = myContractRows(req.user); const ids = cs.map((c) => c.id);
     const ps = ids.length ? db.prepare(`SELECT * FROM payments WHERE contract_id IN (${ids.map(() => '?').join(',')})`).all(...ids) : [];
-    rows = [['receipt', 'contract', 'kind', 'due', 'amount_bhd', 'status', 'paid_on', 'method'], ...ps.map((p) => { const c = contractRow(p.contract_id); return [p.receipt, c ? c.no : '', p.kind, p.due_date, p.amount, p.status, p.paid_on || '', p.method || '']; })];
+    rows = [['receipt', 'contract', 'kind', 'due', 'amount_bhd', 'status', 'paid_on', 'method', 'gateway', 'txn_ref'], ...ps.map((p) => { const c = contractRow(p.contract_id); return [p.receipt, c ? c.no : '', p.kind, p.due_date, p.amount, p.status, p.paid_on || '', p.method || '', p.gateway_id || '', p.txn_ref || '']; })];
   } else if (kind === 'users') {
     if (!hasPerm(req, 'users.view')) return { status: 403, body: { error: 'forbidden' } };
     rows = [['id', 'name', 'email', 'role', 'status', 'verified'], ...db.prepare('SELECT * FROM users').all().map((u) => [u.id, u.name_en, u.email, u.role, u.status, u.verified ? 1 : 0])];

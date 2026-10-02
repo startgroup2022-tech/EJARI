@@ -40,7 +40,7 @@ const ROLES = {
 const VIEWS = {
   landlord: ['overview', 'properties', 'contracts', 'payments', 'renewals', 'maintenance', 'calendar', 'documents', 'services', 'requests', 'reports', 'verify', 'support', 'notifications', 'profile'],
   tenant: ['overview', 'contracts', 'payments', 'renewals', 'maintenance', 'calendar', 'documents', 'services', 'requests', 'verify', 'support', 'notifications', 'profile'],
-  admin: ['overview', 'users', 'verification', 'contracts', 'properties', 'payments', 'tickets', 'services', 'requests', 'appointments', 'integrations', 'content', 'roles', 'reports', 'notifications-admin', 'audit', 'settings', 'notifications', 'profile'],
+  admin: ['overview', 'users', 'verification', 'contracts', 'properties', 'payments', 'tickets', 'services', 'requests', 'appointments', 'integrations', 'gateways', 'content', 'roles', 'reports', 'notifications-admin', 'audit', 'settings', 'notifications', 'profile'],
 };
 
 let chrome;

@@ -73,8 +73,15 @@ Rules that matter when editing it:
 - **Release builds are debug-signed** (`android/app/build.gradle.kts`). Replace with a real
   signing config before publishing.
 - **Not yet done:** `ios/` is ungenerated (no macOS/Xcode here). The web forgot-password flow
-  exists (`POST /api/auth/forgot-password` + `reset.html`), but the Flutter client does not
-  expose it yet.
+  exists (`POST /api/auth/forgot-password` + `reset.html`); the Flutter client now exposes it
+  too (`ForgotPasswordScreen` / `ResetPasswordScreen`, routed at `/auth/reset-password`, plus
+  an `ejari://reset-password` deep link registered in `AndroidManifest.xml`). The reset email
+  still points at the web page, so the deep link only fires if the mail is changed to the
+  `ejari://` form.
+- **Refunds:** tenants request a refund on a settled payment from `payments_screen.dart`
+  (`POST /api/refunds`); `GET /api/bootstrap` returns contract-scoped `refunds` (admins get
+  all), and `Refund`/`Bootstrap.refundOfPayment` drive the status chip. A rejected request may
+  be re-submitted; a pending/approved one may not.
 
 
 ## Commands

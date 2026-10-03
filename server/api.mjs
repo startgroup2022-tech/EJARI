@@ -75,7 +75,7 @@ const mapMsg = (m) => ({ id: m.id, ev: { ar: m.event_ar, en: m.event_en }, ar: m
 const mapInteg = (i) => ({ id: i.id, name: { ar: i.name_ar, en: i.name_en }, desc: { ar: i.desc_ar, en: i.desc_en }, on: bool(i.enabled), st: i.enabled ? i.status : 'off', ms: i.latency_ms, last: i.last_sync_min, kind: INTEGRATION_KIND[i.id] || 'config' });
 const mapRole = (r) => ({ id: r.id, ar: r.name_ar, en: r.name_en, editable: bool(r.editable) });
 const mapVerif = (v) => ({ id: S(v.id), u: S(v.user_id), kind: v.kind, prop: v.property_id ? S(v.property_id) : null, t: v.created_at });
-const mapRefund = (r) => ({ id: r.id, c: S(r.contract_id), amount: r.amount, why: { ar: r.reason_ar, en: r.reason_en }, st: r.status });
+const mapRefund = (r) => ({ id: r.id, c: S(r.contract_id), p: S(r.payment_id), amount: r.amount, why: { ar: r.reason_ar, en: r.reason_en }, st: r.status });
 
 function contractRow(id) { return db.prepare('SELECT * FROM contracts WHERE id=?').get(id); }
 function userRow(id) { return db.prepare('SELECT * FROM users WHERE id=?').get(id); }
@@ -279,6 +279,9 @@ add('GET', '/api/bootstrap', true, (req) => {
     units: units.map(mapUnit),
     contracts: contracts.map(mapContract),
     payments: payments.map(mapPayment),
+    // Refunds on the contracts this user can already see, so a payer can follow the
+    // status of a request they made. Admins get the full list below.
+    refunds: cIds.length ? db.prepare(`SELECT * FROM refunds WHERE contract_id IN (${cIds.map(() => '?').join(',')})`).all(...cIds).map(mapRefund) : [],
     maintenance: maint.map(mapMaint),
     documents: docs.map(mapDoc),
     notifications: notifs.map(mapNotif),

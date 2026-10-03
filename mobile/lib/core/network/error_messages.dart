@@ -15,6 +15,14 @@ String describeApiError(ApiException e, AppStrings s) {
       return s.errWrongPassword;
     case 'too_many_requests':
       return s.errRateLimited;
+    case 'already_requested':
+      return s.refundExists;
+    case 'not_refundable':
+      return s.refundNotAllowed;
+    case 'invalid_token':
+      return s.resetInvalidLink;
+    case 'expired_token':
+      return s.resetExpiredLink;
     case 'no_active_contract':
       return s.noContracts;
     case 'service_not_found':

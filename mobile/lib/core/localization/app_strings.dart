@@ -176,6 +176,18 @@ abstract class AppStrings {
   String get payProviderOpened;
   String get feePayment;
 
+  // ---- Refunds ----
+  String get refundRequest;
+  String get refundPending;
+  String get refundApproved;
+  String get refundRejected;
+  String get refundReasonLabel;
+  String get refundReasonHint;
+  String get refundSend;
+  String get refundSent;
+  String get refundExists;
+  String get refundNotAllowed;
+
   // ---- Maintenance ----
   String get maintenance;
   String get maintenanceRequest;
@@ -258,6 +270,21 @@ abstract class AppStrings {
   String get currentPassword;
   String get newPassword;
   String get passwordChanged;
+  String get forgotPassword;
+  String get forgotPasswordTitle;
+  String get forgotPasswordIntro;
+  String get sendResetLink;
+  String get resetLinkSentTitle;
+  String get resetLinkSentBody;
+  String get backToLogin;
+  String get resetPasswordTitle;
+  String get resetPasswordIntro;
+  String get confirmPassword;
+  String get passwordMismatch;
+  String get resetInvalidLink;
+  String get resetExpiredLink;
+  String get resetSuccess;
+  String get verifyingLink;
   String get about;
   String get version;
 
@@ -574,6 +601,27 @@ class AppStringsAr extends AppStrings {
   String get feePayment => 'رسوم';
 
   @override
+  String get refundRequest => 'طلب استرجاع';
+  @override
+  String get refundPending => 'قيد المراجعة';
+  @override
+  String get refundApproved => 'تم الاعتماد';
+  @override
+  String get refundRejected => 'مرفوض';
+  @override
+  String get refundReasonLabel => 'السبب';
+  @override
+  String get refundReasonHint => 'اذكر سبب طلب الاسترجاع…';
+  @override
+  String get refundSend => 'إرسال الطلب';
+  @override
+  String get refundSent => 'تم إرسال طلب الاسترجاع إلى الإدارة للمراجعة.';
+  @override
+  String get refundExists => 'يوجد طلب استرجاع سابق لهذه الدفعة قيد المراجعة أو معتمد.';
+  @override
+  String get refundNotAllowed => 'لا يمكن طلب استرجاع لهذه الدفعة.';
+
+  @override
   String get maintenance => 'الصيانة';
   @override
   String get maintenanceRequest => 'طلب صيانة';
@@ -723,6 +771,36 @@ class AppStringsAr extends AppStrings {
   String get newPassword => 'كلمة المرور الجديدة';
   @override
   String get passwordChanged => 'تم تغيير كلمة المرور بنجاح';
+  @override
+  String get forgotPassword => 'نسيت كلمة المرور؟';
+  @override
+  String get forgotPasswordTitle => 'إعادة تعيين كلمة المرور';
+  @override
+  String get forgotPasswordIntro => 'أدخل بريدك الإلكتروني وسنرسل لك رابطاً لإعادة تعيين كلمة المرور إن كان الحساب موجوداً.';
+  @override
+  String get sendResetLink => 'إرسال رابط الإعادة';
+  @override
+  String get resetLinkSentTitle => 'تحقّق من بريدك';
+  @override
+  String get resetLinkSentBody => 'إذا كان هذا البريد مسجّلاً لدينا، فسيصلك رابط لإعادة تعيين كلمة المرور خلال دقائق.';
+  @override
+  String get backToLogin => 'العودة لتسجيل الدخول';
+  @override
+  String get resetPasswordTitle => 'تعيين كلمة مرور جديدة';
+  @override
+  String get resetPasswordIntro => 'اختر كلمة مرور جديدة لحسابك.';
+  @override
+  String get confirmPassword => 'تأكيد كلمة المرور';
+  @override
+  String get passwordMismatch => 'كلمتا المرور غير متطابقتين.';
+  @override
+  String get resetInvalidLink => 'رابط إعادة التعيين غير صالح أو مُستخدَم. اطلب رابطاً جديداً.';
+  @override
+  String get resetExpiredLink => 'انتهت صلاحية رابط إعادة التعيين. اطلب رابطاً جديداً.';
+  @override
+  String get resetSuccess => 'تم تعيين كلمة المرور. يمكنك تسجيل الدخول الآن.';
+  @override
+  String get verifyingLink => 'جارٍ التحقق من الرابط…';
   @override
   String get about => 'عن التطبيق';
   @override
@@ -1048,6 +1126,27 @@ class AppStringsEn extends AppStrings {
   String get feePayment => 'Fee';
 
   @override
+  String get refundRequest => 'Request a refund';
+  @override
+  String get refundPending => 'Under review';
+  @override
+  String get refundApproved => 'Approved';
+  @override
+  String get refundRejected => 'Rejected';
+  @override
+  String get refundReasonLabel => 'Reason';
+  @override
+  String get refundReasonHint => 'Describe why you are requesting a refund…';
+  @override
+  String get refundSend => 'Send request';
+  @override
+  String get refundSent => 'Your refund request was sent to the administration for review.';
+  @override
+  String get refundExists => 'A refund request for this payment is already pending or approved.';
+  @override
+  String get refundNotAllowed => 'A refund cannot be requested for this payment.';
+
+  @override
   String get maintenance => 'Maintenance';
   @override
   String get maintenanceRequest => 'Maintenance request';
@@ -1197,6 +1296,36 @@ class AppStringsEn extends AppStrings {
   String get newPassword => 'New password';
   @override
   String get passwordChanged => 'Password changed successfully';
+  @override
+  String get forgotPassword => 'Forgot password?';
+  @override
+  String get forgotPasswordTitle => 'Reset your password';
+  @override
+  String get forgotPasswordIntro => 'Enter your email and we will send a reset link if the account exists.';
+  @override
+  String get sendResetLink => 'Send reset link';
+  @override
+  String get resetLinkSentTitle => 'Check your email';
+  @override
+  String get resetLinkSentBody => 'If this email is registered, a password reset link will arrive within minutes.';
+  @override
+  String get backToLogin => 'Back to sign in';
+  @override
+  String get resetPasswordTitle => 'Set a new password';
+  @override
+  String get resetPasswordIntro => 'Choose a new password for your account.';
+  @override
+  String get confirmPassword => 'Confirm password';
+  @override
+  String get passwordMismatch => 'The passwords do not match.';
+  @override
+  String get resetInvalidLink => 'This reset link is invalid or already used. Request a new one.';
+  @override
+  String get resetExpiredLink => 'This reset link has expired. Request a new one.';
+  @override
+  String get resetSuccess => 'Your password was set. You can sign in now.';
+  @override
+  String get verifyingLink => 'Verifying the link…';
   @override
   String get about => 'About';
   @override

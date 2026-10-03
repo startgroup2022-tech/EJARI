@@ -6,6 +6,7 @@ import 'maintenance.dart';
 import 'notification.dart';
 import 'payment.dart';
 import 'property.dart';
+import 'refund.dart';
 import 'service.dart';
 
 /// The single payload returned by `GET /api/bootstrap`.
@@ -27,6 +28,7 @@ class Bootstrap {
     this.requests = const [],
     this.autopay = false,
     this.verifications = const [],
+    this.refunds = const [],
   });
 
   final AppUser me;
@@ -42,6 +44,9 @@ class Bootstrap {
   final List<ServiceRequest> requests;
   final bool autopay;
   final List<Map<String, dynamic>> verifications;
+
+  /// Refund requests — only populated for administrators by the backend.
+  final List<Refund> refunds;
 
   factory Bootstrap.fromJson(dynamic json) {
     final m = asMap(json);
@@ -59,6 +64,7 @@ class Bootstrap {
       requests: asMapList(m['requests']).map(ServiceRequest.fromJson).toList(),
       autopay: asBool(m['autopay']),
       verifications: asMapList(m['verifications']),
+      refunds: asMapList(m['refunds']).map(Refund.fromJson).toList(),
     );
   }
 
@@ -107,4 +113,12 @@ class Bootstrap {
   /// Payments that belong to a given contract.
   List<Payment> paymentsOf(String contractId) =>
       payments.where((p) => p.contractId == contractId).toList();
+
+  /// A refund request linked to a given payment, if one exists.
+  Refund? refundOfPayment(String paymentId) {
+    for (final r in refunds) {
+      if (r.paymentId == paymentId) return r;
+    }
+    return null;
+  }
 }

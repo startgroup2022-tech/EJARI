@@ -47,6 +47,14 @@ class DomainLabels {
         _ => kind,
       };
 
+  // ---- Refunds ----
+  static (String, Tone) refund(String status, AppStrings s) => switch (status) {
+        'pending' => (s.refundPending, Tone.warn),
+        'approved' => (s.refundApproved, Tone.success),
+        'rejected' => (s.refundRejected, Tone.danger),
+        _ => (status, Tone.neutral),
+      };
+
   // ---- Maintenance ----
   static (String, Tone) maintenance(String status, AppStrings s) => switch (status) {
         'new' => (s.statusNew, Tone.info),

@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:ejari_mobile/core/network/api_client.dart';
 import 'package:ejari_mobile/core/storage/secure_store.dart';
 import 'package:ejari_mobile/models/app_user.dart';
+import 'package:ejari_mobile/models/payment.dart';
 import 'package:ejari_mobile/services/api/ejari_api.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -165,6 +166,31 @@ void main() {
 
     final after = await api.bootstrap();
     expect(after.unreadCount, 0);
+  });
+
+  test('a tenant can request a refund and it appears in the bootstrap', () async {
+    await api.demoLogin('tenant');
+    final boot = await api.bootstrap();
+
+    // Prefer an already-paid payment; otherwise pay one first so the request is valid.
+    Payment? paid = boot.payments.where((p) => p.isPaid).firstOrNull;
+    if (paid == null) {
+      final unpaid = boot.payments.where((p) => !p.isPaid).firstOrNull;
+      if (unpaid == null) return; // seeded tenant has no payments to act on
+      await api.pay(unpaid.id, 'benefit');
+      paid = (await api.bootstrap()).payments.firstWhere((p) => p.id == unpaid.id);
+    }
+
+    // A refund may already be pending/approved from an earlier run; skip in that case.
+    if (boot.refundOfPayment(paid.id) != null) return;
+
+    await api.requestRefund(paymentId: paid.id, reason: 'live contract test');
+
+    final after = await api.bootstrap();
+    final refund = after.refundOfPayment(paid.id);
+    expect(refund, isNotNull, reason: 'the refund request must be persisted server-side');
+    expect(refund!.status, 'pending', reason: 'a new request starts pending admin review');
+    expect(refund.amount, greaterThan(0));
   });
 
   test('invalid credentials produce a typed, localisable error', () async {

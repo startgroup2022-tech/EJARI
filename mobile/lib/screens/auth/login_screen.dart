@@ -8,6 +8,7 @@ import '../../core/theme/ejari_palette.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/core_providers.dart';
 import '../../widgets/ejari_logo.dart';
+import 'forgot_password_screen.dart';
 
 /// Email + password sign-in against the real Ejari backend.
 class LoginScreen extends ConsumerStatefulWidget {
@@ -75,6 +76,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final current = ref.read(localeProvider) ?? Localizations.localeOf(context);
     final next = current.languageCode == 'ar' ? const Locale('en') : const Locale('ar');
     ref.read(localeProvider.notifier).set(next);
+  }
+
+  void _openForgotPassword() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
+    );
   }
 
   @override
@@ -180,7 +187,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       _Banner(icon: Icons.error_outline_rounded, tone: Tone.danger, text: _error!),
                     ],
 
-                    const SizedBox(height: 22),
+                    const SizedBox(height: 6),
+                    Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: TextButton(
+                        onPressed: _busy ? null : _openForgotPassword,
+                        child: Text(s.forgotPassword),
+                      ),
+                    ),
+
+                    const SizedBox(height: 6),
                     FilledButton(
                       onPressed: _busy ? null : _submit,
                       child: _busy

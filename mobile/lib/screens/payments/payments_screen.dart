@@ -9,6 +9,7 @@ import '../../core/localization/formatters.dart';
 import '../../core/network/error_messages.dart';
 import '../../core/theme/ejari_palette.dart';
 import '../../models/payment.dart';
+import '../../models/refund.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/core_providers.dart';
 import '../../widgets/kpi_card.dart';
@@ -144,15 +145,23 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
                     itemCount: filtered.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, i) => _PaymentTile(
-                      payment: filtered[i],
-                      boot: boot,
-                      s: s,
-                      lang: lang,
-                      canPay: isTenant && !filtered[i].isPaid,
-                      busy: _busyId == filtered[i].id,
-                      onPay: () => _confirmPay(filtered[i]),
-                    ),
+                    itemBuilder: (context, i) {
+                      final payment = filtered[i];
+                      final refund = boot.refundOfPayment(payment.id);
+                      return _PaymentTile(
+                        payment: payment,
+                        boot: boot,
+                        s: s,
+                        lang: lang,
+                        canPay: isTenant && !payment.isPaid,
+                        // A rejected request may be re-submitted; a pending/approved one may not.
+                        canRefund: isTenant && payment.isPaid && (refund == null || refund.isRejected),
+                        refund: refund,
+                        busy: _busyId == payment.id,
+                        onPay: () => _confirmPay(payment),
+                        onRefund: () => _confirmRefund(payment),
+                      );
+                    },
                   ),
           ),
         ),
@@ -228,6 +237,97 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
       if (mounted) setState(() => _busyId = null);
     }
   }
+
+  /// Asks the administration to refund a settled payment. The request is created
+  /// `pending`; the backend only moves the money after an administrator approves it.
+  Future<void> _confirmRefund(Payment payment) async {
+    final s = AppStrings.of(context);
+    final reason = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => _RefundSheet(payment: payment, s: s),
+    );
+    if (reason == null || !mounted) return;
+
+    setState(() => _busyId = payment.id);
+    try {
+      await ref.read(ejariApiProvider).requestRefund(paymentId: payment.id, reason: reason);
+      await ref.read(authProvider.notifier).refresh();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s.refundSent)));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(describeApiError(e, AppStrings.of(context)))));
+    } finally {
+      if (mounted) setState(() => _busyId = null);
+    }
+  }
+}
+
+/// Bottom sheet that collects the refund reason before the real API call.
+class _RefundSheet extends StatefulWidget {
+  const _RefundSheet({required this.payment, required this.s});
+
+  final Payment payment;
+  final AppStrings s;
+
+  @override
+  State<_RefundSheet> createState() => _RefundSheetState();
+}
+
+class _RefundSheetState extends State<_RefundSheet> {
+  final _reason = TextEditingController();
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.s;
+    final p = context.palette;
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(20, 4, 20, 20 + MediaQuery.viewInsetsOf(context).bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              s.refundRequest,
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: p.ink),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              Fmt.money(widget.payment.amount, s.currency),
+              style: TextStyle(fontSize: 13.5, color: p.ink2),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _reason,
+              minLines: 3,
+              maxLines: 5,
+              textInputAction: TextInputAction.newline,
+              decoration: InputDecoration(
+                labelText: s.refundReasonLabel,
+                hintText: s.refundReasonHint,
+                alignLabelWithHint: true,
+              ),
+            ),
+            const SizedBox(height: 18),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, _reason.text.trim()),
+              child: Text(s.refundSend),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _GatewaySheet extends StatelessWidget {
@@ -283,8 +383,11 @@ class _PaymentTile extends StatelessWidget {
     required this.s,
     required this.lang,
     required this.canPay,
+    required this.canRefund,
+    required this.refund,
     required this.busy,
     required this.onPay,
+    required this.onRefund,
   });
 
   final Payment payment;
@@ -292,8 +395,11 @@ class _PaymentTile extends StatelessWidget {
   final AppStrings s;
   final String lang;
   final bool canPay;
+  final bool canRefund;
+  final Refund? refund;
   final bool busy;
   final VoidCallback onPay;
+  final VoidCallback onRefund;
 
   @override
   Widget build(BuildContext context) {
@@ -352,6 +458,12 @@ class _PaymentTile extends StatelessWidget {
                 ),
               if (payment.receipt != null)
                 StatusChip(label: payment.receipt!, tone: Tone.gold, icon: Icons.receipt_long_outlined),
+              if (refund != null)
+                StatusChip(
+                  label: '${s.refundRequest}: ${DomainLabels.refund(refund!.status, s).$1}',
+                  tone: DomainLabels.refund(refund!.status, s).$2,
+                  icon: Icons.assignment_return_outlined,
+                ),
             ],
           ),
           if (canPay) ...[
@@ -368,6 +480,17 @@ class _PaymentTile extends StatelessWidget {
                       )
                     : const Icon(Icons.payments_rounded, size: 19),
                 label: Text(s.payNow),
+              ),
+            ),
+          ],
+          if (canRefund) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: busy ? null : onRefund,
+                icon: const Icon(Icons.assignment_return_outlined, size: 19),
+                label: Text(s.refundRequest),
               ),
             ),
           ],

@@ -42,6 +42,15 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
+            <!-- Lets an `ejari://reset-password?token=…` link from a reset email
+                 open the app straight on the reset screen. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="ejari" android:host="reset-password" />
+            </intent-filter>
         </activity>
 
         <meta-data

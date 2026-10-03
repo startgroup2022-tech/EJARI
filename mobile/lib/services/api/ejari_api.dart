@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import '../../core/errors/api_exception.dart';
 import '../../core/network/api_client.dart';
 import '../../models/app_user.dart';
 import '../../models/bootstrap.dart';
@@ -61,6 +62,33 @@ class EjariApi {
       _client.post<Map<String, dynamic>>(
         '/api/auth/password',
         body: {'currentPassword': currentPassword, 'newPassword': newPassword},
+      );
+
+  /// `POST /api/auth/forgot-password`
+  ///
+  /// The backend always answers with the same generic body, so the UI must never
+  /// branch on account existence — only confirm that the request was accepted.
+  Future<void> forgotPassword(String email) =>
+      _client.post<Map<String, dynamic>>('/api/auth/forgot-password', body: {'email': email});
+
+  /// `GET /api/auth/reset-password/:token` — validates a reset link before showing the form.
+  /// Returns `valid`, `expired` or `invalid`.
+  Future<String> checkResetToken(String token) async {
+    try {
+      await _client.get<Map<String, dynamic>>('/api/auth/reset-password/$token');
+      return 'valid';
+    } on ApiException catch (e) {
+      if (e.statusCode == 410) return 'expired';
+      if (e.statusCode == 404) return 'invalid';
+      rethrow;
+    }
+  }
+
+  /// `POST /api/auth/reset-password` — sets a new password with a valid token.
+  Future<void> resetPassword({required String token, required String password}) =>
+      _client.post<Map<String, dynamic>>(
+        '/api/auth/reset-password',
+        body: {'token': token, 'password': password},
       );
 
   // ---------------- Bootstrap ----------------
@@ -155,6 +183,20 @@ class EjariApi {
   /// `POST /api/payments/:id/remind` (landlord/admin only on the server)
   Future<void> remindPayment(String paymentId) =>
       _client.post<Map<String, dynamic>>('/api/payments/$paymentId/remind');
+
+  // ---------------- Refunds ----------------
+
+  /// `POST /api/refunds` — a tenant asks for a refund on a payment they made.
+  /// The request is created `pending`; it only settles once an administrator approves it.
+  Future<void> requestRefund({required String paymentId, String reason = ''}) =>
+      _client.post<Map<String, dynamic>>(
+        '/api/refunds',
+        body: {
+          'paymentId': paymentId,
+          if (reason.trim().isNotEmpty) 'reasonAr': reason.trim(),
+          if (reason.trim().isNotEmpty) 'reasonEn': reason.trim(),
+        },
+      );
 
   // ---------------- Notifications ----------------
 

@@ -84,7 +84,7 @@ the Arabic UI.
 
 ## Testing
 
-`flutter test` runs three hermetic suites and never touches the network:
+`flutter test` runs four hermetic suites and never touches the network:
 
 - `test/models_test.dart` — parses payloads shaped exactly like the real backend responses,
   including missing fields, unknown enum values and derived fields (contract end date,
@@ -93,6 +93,8 @@ the Arabic UI.
   `HttpClientAdapter`, so cookie capture, `Cookie` replay, `401` session clearing, every
   error mapping and binary download are all exercised as real code, not mocks.
 - `test/formatters_test.dart` — money, date and date-time formatting in both languages.
+- `test/refund_and_reset_test.dart` — refund parsing/lookup and labels, the forgot/reset
+  password API calls (paths, bodies, error codes) and reset-link routing.
 
 `test/live_api_test.dart` is an opt-in contract test. With `EJARI_BASE_URL` set it logs in as
 each seeded role and performs **real writes** — creating a maintenance request, paying a due
@@ -133,8 +135,10 @@ keytool -printcert -jarfile build/app/outputs/bundle/release/app-release.aab
 ## Known gaps
 
 - **iOS** — `ios/` has not been generated or built; no macOS/Xcode in this environment.
-- **Password reset** — the backend exposes no reset/forgot-password endpoint
-  (`/api/auth/*` is register, login, demo, logout, me, password), so the app intentionally
-  offers change-password only.
 - **Documents without a stored file** — documents that carry metadata but no `dataUrl` are
   shown as unavailable rather than offering a download that would fail.
+- **Native reset deep link** — the reset email the backend sends contains a web link
+  (`/reset.html?token=…`). The app can also open an `ejari://reset-password?token=…`
+  link, and the `ejari` scheme is registered in `AndroidManifest.xml`, but the outbound
+  email still points at the web page. Switching the email to the `ejari://` form is a
+  backend messaging change and has not been made here.

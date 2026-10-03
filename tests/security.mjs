@@ -121,7 +121,7 @@ try {
       ok(rr.status !== 200 || !rr.data?.user, `demo role=${JSON.stringify(role)} does not mint a session (got ${rr.status})`);
     }
     // demo must be disabled in production mode
-    const env = { ...process.env, EJARI_DB_FILE: dbFile, NODE_ENV: 'production', PORT: String(PORT + 1) };
+    const env = { ...process.env, EJARI_DB_FILE: dbFile, NODE_ENV: 'production', EJARI_SECRET_KEY: 'test-secret-key-security', PORT: String(PORT + 1) };
     const prod = spawn(process.execPath, ['server.mjs', String(PORT + 1)], { cwd: root, env, stdio: 'pipe' });
     let pboot = false;
     prod.stdout.on('data', (d) => { if (String(d).includes('running')) pboot = true; });

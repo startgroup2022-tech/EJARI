@@ -82,7 +82,7 @@ Rules that matter when editing it:
 npm test                 # 88 end-to-end checks (starts its own server on :4321)
 npm run test:security    # 204 security probes
 npm run test:render      # 158 render-integrity checks (views + the admin messaging modal)
-npm run test:production  # 31 production-mode checks (empty DB, real scenario, restart, IP allow-list, PWA assets)
+npm run test:production  # 33 production-mode checks (empty DB, real scenario, restart, IP allow-list, PWA assets, secret-key fail-fast)
 npm run test:ui          # 17 real-browser UI checks (demo vs production)
 npm run test:gateway     # 70 payment-gateway checks (signed webhooks, refunds, real DB)
 npm run test:tap         # 44 Tap Payments checks against a local Tap API contract stand-in
@@ -105,6 +105,12 @@ rm -f data/ejari.db*     # reset to seed data (re-seeds on next start, dev only)
   account" switcher in `mobile.js`, demo CTA copy in `landing.js`) is gated on `demoOn()`.
 - `POST /api/auth/demo` returns 404 in production. It also coerces `role` to a string before
   binding, so a bogus role is `400`, never a SQLite 500.
+- `EJARI_SECRET_KEY` is **required** in production: it derives the AES-256-GCM master key for
+  stored gateway/messaging credentials. `server.mjs` calls `assertCryptoReady()` (from
+  `gateways.mjs`) before it imports the DB, so a missing key aborts boot with a clear error
+  instead of silently encrypting with the public development default. Dev/test keep the
+  fallback with a warning. `deploy/ejari.service` and `docker-compose.yml` set a placeholder
+  that must be replaced (`openssl rand -hex 32`).
 
 ## Conventions that matter
 - **Scripts are classic, not modules.** They share globals (`DB`, `S`, `A`, `MOD`, `V`, `T`).

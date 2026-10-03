@@ -19,15 +19,32 @@ import crypto from 'node:crypto';
 
 // ---------------------------------------------------------------- secret storage
 
-const MASTER = crypto.createHash('sha256')
-  .update(String(process.env.EJARI_SECRET_KEY || 'ejari-local-development-master-key'))
-  .digest();
+// AES-256-GCM master key for every stored gateway/messaging credential. In production this must
+// be a real, private secret: falling back to the well-known development string there would leave
+// all encrypted credentials readable by anyone who has the source. Resolve it per call (never
+// cache), and fail fast in production when it is missing.
+let _warnedMissingKey = false;
+function masterKey() {
+  const raw = String(process.env.EJARI_SECRET_KEY || '').trim();
+  if (raw) return crypto.createHash('sha256').update(raw).digest();
+  if (process.env.NODE_ENV === 'production' || process.env.EJARI_DISABLE_DEMO === '1') {
+    throw new Error('EJARI_SECRET_KEY is required in production: it encrypts stored provider credentials (payment gateways, email/SMS). Set it to a long random value before starting the server.');
+  }
+  if (!_warnedMissingKey) {
+    _warnedMissingKey = true;
+    console.warn('\n  ⚠  EJARI_SECRET_KEY is not set — using a well-known development key. Do not run production this way.\n');
+  }
+  return crypto.createHash('sha256').update('ejari-local-development-master-key').digest();
+}
+
+/** Force the master key to resolve. Called at boot so production fails fast when it is missing. */
+export function assertCryptoReady() { masterKey(); }
 
 /** Encrypt a JSON-serialisable value. Returns null for empty input. */
 export function encryptJson(value) {
   if (value == null || value === '') return null;
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', MASTER, iv);
+  const cipher = crypto.createCipheriv('aes-256-gcm', masterKey(), iv);
   const plain = Buffer.from(JSON.stringify(value), 'utf8');
   const enc = Buffer.concat([cipher.update(plain), cipher.final()]);
   const tag = cipher.getAuthTag();
@@ -39,7 +56,7 @@ export function decryptJson(payload) {
   if (!payload) return null;
   try {
     const [ivB64, tagB64, dataB64] = String(payload).split('.');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', MASTER, Buffer.from(ivB64, 'base64'));
+    const decipher = crypto.createDecipheriv('aes-256-gcm', masterKey(), Buffer.from(ivB64, 'base64'));
     decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
     const dec = Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64')), decipher.final()]);
     return JSON.parse(dec.toString('utf8'));

@@ -9,6 +9,9 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
+      # Required: encrypts stored provider credentials (payment gateways, email/SMS).
+      # Generate once with: openssl rand -hex 32   — keep it stable across restarts.
+      - EJARI_SECRET_KEY=change-me-to-a-long-random-secret
       # First run only: creates the initial super admin (no demo accounts are ever created).
       # Remove these two lines after the first successful boot, then recreate the container.
       - EJARI_ADMIN_EMAIL=admin@ejari.bh

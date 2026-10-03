@@ -71,7 +71,7 @@ try {
   demo.proc.kill();
 
   // ================= PRODUCTION MODE =================
-  const prod = startServer(4502, { EJARI_DB_FILE: dbProd, NODE_ENV: 'production', EJARI_ADMIN_EMAIL: 'root@ejari.bh', EJARI_ADMIN_PASSWORD: 'Sup3rSecret!' });
+  const prod = startServer(4502, { EJARI_DB_FILE: dbProd, NODE_ENV: 'production', EJARI_SECRET_KEY: 'test-secret-key-browser-ui', EJARI_ADMIN_EMAIL: 'root@ejari.bh', EJARI_ADMIN_PASSWORD: 'Sup3rSecret!' });
   ok(await prod.ready(), 'production-mode server boots');
   {
     const { c, tab } = await openTab('http://127.0.0.1:4502/website.html');

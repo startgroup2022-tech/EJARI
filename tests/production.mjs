@@ -32,7 +32,7 @@ const ADMIN_EMAIL = 'root@ejari.bh', ADMIN_PASS = 'Sup3rSecret!';
 function startServer(extraEnv = {}) {
   const proc = spawn(process.execPath, ['server.mjs', String(PORT)], {
     cwd: root,
-    env: { ...process.env, EJARI_DB_FILE: dbFile, NODE_ENV: 'production', EJARI_ADMIN_EMAIL: ADMIN_EMAIL, EJARI_ADMIN_PASSWORD: ADMIN_PASS, ...extraEnv },
+    env: { ...process.env, EJARI_DB_FILE: dbFile, NODE_ENV: 'production', EJARI_SECRET_KEY: 'test-secret-key-production', EJARI_ADMIN_EMAIL: ADMIN_EMAIL, EJARI_ADMIN_PASSWORD: ADMIN_PASS, ...extraEnv },
     stdio: 'pipe',
   });
   let booted = false;
@@ -154,6 +154,22 @@ try {
   }
   const manifest = await (await fetch(`${BASE}/manifest.webmanifest`)).json();
   ok(manifest.start_url && manifest.icons && manifest.icons.length > 0, 'manifest declares a start_url and icons');
+
+  // ---- fail fast without EJARI_SECRET_KEY: production must not encrypt with a public default ----
+  {
+    const noKey = spawn(process.execPath, ['server.mjs', String(PORT + 1)], {
+      cwd: root,
+      env: { ...process.env, EJARI_DB_FILE: dbFile, NODE_ENV: 'production', EJARI_SECRET_KEY: '', EJARI_ADMIN_EMAIL: ADMIN_EMAIL, EJARI_ADMIN_PASSWORD: ADMIN_PASS },
+      stdio: 'pipe',
+    });
+    let out = '', booted = false;
+    noKey.stdout.on('data', (d) => { out += String(d); if (String(d).includes('running')) booted = true; });
+    noKey.stderr.on('data', (d) => { out += String(d); });
+    const exited = await new Promise((res) => { const t = setTimeout(() => res(false), 6000); noKey.on('exit', () => { clearTimeout(t); res(true); }); });
+    ok(exited && !booted, 'production refuses to start without EJARI_SECRET_KEY');
+    ok(/EJARI_SECRET_KEY/.test(out), 'the boot error names the missing EJARI_SECRET_KEY');
+    try { noKey.kill(); } catch {}
+  }
 } catch (e) {
   failed++; console.error('✗ EXCEPTION', e);
 } finally {
